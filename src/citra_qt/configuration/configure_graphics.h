@@ -19,7 +19,7 @@ class ConfigureGraphics : public QWidget {
     Q_OBJECT
 
 public:
-    explicit ConfigureGraphics(QWidget* parent = nullptr);
+    explicit ConfigureGraphics(bool is_powered_on, QWidget* parent = nullptr);
     ~ConfigureGraphics() override;
 
     void ApplyConfiguration();
@@ -32,7 +32,6 @@ private:
     void SetupPerGameUI();
 
     ConfigurationShared::CheckState use_hw_shader;
-    ConfigurationShared::CheckState separable_shader;
     ConfigurationShared::CheckState shaders_accurate_mul;
     ConfigurationShared::CheckState use_disk_shader_cache;
     ConfigurationShared::CheckState use_vsync_new;

@@ -5,7 +5,6 @@
 #include <cstring>
 #include <fmt/format.h>
 
-#include "common/assert.h"
 #include "common/common_paths.h"
 #include "common/common_types.h"
 #include "common/file_util.h"
@@ -14,7 +13,7 @@
 #include "common/settings.h"
 #include "common/zstd_compression.h"
 #include "core/core.h"
-#include "core/hle/kernel/process.h"
+#include "core/loader/loader.h"
 #include "video_core/renderer_opengl/gl_shader_disk_cache.h"
 
 namespace OpenGL {
@@ -372,6 +371,7 @@ void ShaderDiskCache::SaveRaw(const ShaderDiskCacheRaw& entry) {
         return;
     }
     transferable.insert({id, entry});
+    transferable_file.Flush();
 }
 
 void ShaderDiskCache::SaveDecompiled(u64 unique_identifier,
@@ -439,6 +439,8 @@ void ShaderDiskCache::SaveDumpToFile(u64 unique_identifier, GLuint program, bool
     // SaveDecompiled is used only to store the accurate multiplication setting, a better way is to
     // probably change the header in SaveDump
     SaveDecompiledToFile(precompiled_file, unique_identifier, {}, sanitize_mul);
+
+    precompiled_file.Flush();
 }
 
 bool ShaderDiskCache::IsUsable() const {
@@ -504,8 +506,8 @@ void ShaderDiskCache::SavePrecompiledHeaderToVirtualPrecompiledCache() {
 
 void ShaderDiskCache::SaveVirtualPrecompiledFile() {
     decompressed_precompiled_cache_offset = 0;
-    const std::vector<u8>& compressed = Common::Compression::CompressDataZSTDDefault(
-        decompressed_precompiled_cache.data(), decompressed_precompiled_cache.size());
+    const auto compressed =
+        Common::Compression::CompressDataZSTDDefault(decompressed_precompiled_cache);
 
     const auto precompiled_path{GetPrecompiledPath()};
 

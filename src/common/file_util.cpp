@@ -3,17 +3,21 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <sstream>
 #include <unordered_map>
 #include <boost/iostreams/device/file_descriptor.hpp>
 #include <boost/iostreams/stream.hpp>
+#include <fmt/format.h>
 #include "common/assert.h"
 #include "common/common_funcs.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
+#include "common/scope_exit.h"
+#include "common/string_util.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -100,12 +104,11 @@ static void StripTailDirSlashes(std::string& fname) {
 }
 
 bool Exists(const std::string& filename) {
-    struct stat file_info;
-
     std::string copy(filename);
     StripTailDirSlashes(copy);
 
 #ifdef _WIN32
+    struct stat file_info;
     // Windows needs a slash to identify a driver root
     if (copy.size() != 0 && copy.back() == ':')
         copy += DIR_SEP_CHR;
@@ -114,6 +117,7 @@ bool Exists(const std::string& filename) {
 #elif ANDROID
     int result = AndroidStorage::FileExists(filename) ? 0 : -1;
 #else
+    struct stat file_info;
     int result = stat(copy.c_str(), &file_info);
 #endif
 
@@ -321,31 +325,32 @@ bool Copy(const std::string& srcFilename, const std::string& destFilename) {
     return AndroidStorage::CopyFile(srcFilename, std::string(GetParentPath(destFilename)),
                                     std::string(GetFilename(destFilename)));
 #else
-    using CFilePointer = std::unique_ptr<FILE, decltype(&std::fclose)>;
 
     // Open input file
-    CFilePointer input{fopen(srcFilename.c_str(), "rb"), std::fclose};
+    FILE* input = fopen(srcFilename.c_str(), "rb");
     if (!input) {
         LOG_ERROR(Common_Filesystem, "opening input failed {} --> {}: {}", srcFilename,
                   destFilename, GetLastErrorMsg());
         return false;
     }
+    SCOPE_EXIT({ fclose(input); });
 
     // open output file
-    CFilePointer output{fopen(destFilename.c_str(), "wb"), std::fclose};
+    FILE* output = fopen(destFilename.c_str(), "wb");
     if (!output) {
         LOG_ERROR(Common_Filesystem, "opening output failed {} --> {}: {}", srcFilename,
                   destFilename, GetLastErrorMsg());
         return false;
     }
+    SCOPE_EXIT({ fclose(output); });
 
     // copy loop
     std::array<char, 1024> buffer;
-    while (!feof(input.get())) {
+    while (!feof(input)) {
         // read input
-        std::size_t rnum = fread(buffer.data(), sizeof(char), buffer.size(), input.get());
+        std::size_t rnum = fread(buffer.data(), sizeof(char), buffer.size(), input);
         if (rnum != buffer.size()) {
-            if (ferror(input.get()) != 0) {
+            if (ferror(input) != 0) {
                 LOG_ERROR(Common_Filesystem, "failed reading from source, {} --> {}: {}",
                           srcFilename, destFilename, GetLastErrorMsg());
                 return false;
@@ -353,7 +358,7 @@ bool Copy(const std::string& srcFilename, const std::string& destFilename) {
         }
 
         // write output
-        std::size_t wnum = fwrite(buffer.data(), sizeof(char), rnum, output.get());
+        std::size_t wnum = fwrite(buffer.data(), sizeof(char), rnum, output);
         if (wnum != rnum) {
             LOG_ERROR(Common_Filesystem, "failed writing to output, {} --> {}: {}", srcFilename,
                       destFilename, GetLastErrorMsg());
@@ -540,7 +545,8 @@ void GetAllFilesFromNestedEntries(FSTEntry& directory, std::vector<FSTEntry>& ou
 }
 
 bool DeleteDirRecursively(const std::string& directory, unsigned int recursion) {
-    const auto callback = [recursion](u64* num_entries_out, const std::string& directory,
+    const auto callback = [recursion]([[maybe_unused]] u64* num_entries_out,
+                                      const std::string& directory,
                                       const std::string& virtual_name) -> bool {
         std::string new_path = directory + DIR_SEP_CHR + virtual_name;
 
@@ -560,7 +566,8 @@ bool DeleteDirRecursively(const std::string& directory, unsigned int recursion) 
     return true;
 }
 
-void CopyDir(const std::string& source_path, const std::string& dest_path) {
+void CopyDir([[maybe_unused]] const std::string& source_path,
+             [[maybe_unused]] const std::string& dest_path) {
 #ifndef _WIN32
     if (source_path == dest_path)
         return;
@@ -695,7 +702,7 @@ static const std::string& GetHomeDirectory() {
  * @return The directory path
  * @sa http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
  */
-static const std::string GetUserDirectory(const std::string& envvar) {
+[[maybe_unused]] static const std::string GetUserDirectory(const std::string& envvar) {
     const char* directory = getenv(envvar.c_str());
 
     std::string user_dir;
@@ -782,7 +789,7 @@ void SetUserPath(const std::string& path) {
             // paths.
             if (!FileUtil::Exists(data_dir) && !FileUtil::Exists(config_dir) &&
                 !FileUtil::Exists(cache_dir)) {
-                data_dir = GetHomeDirectory() + DIR_SEP MACOS_EMU_DATA_DIR DIR_SEP;
+                data_dir = GetHomeDirectory() + DIR_SEP APPLE_EMU_DATA_DIR DIR_SEP;
                 config_dir = data_dir + CONFIG_DIR DIR_SEP;
                 cache_dir = data_dir + CACHE_DIR DIR_SEP;
             }
@@ -850,7 +857,7 @@ const std::string& GetDefaultUserPath(UserPath path) {
     return g_default_paths[path];
 }
 
-const void UpdateUserPath(UserPath path, const std::string& filename) {
+void UpdateUserPath(UserPath path, const std::string& filename) {
     if (filename.empty()) {
         return;
     }
@@ -900,14 +907,14 @@ void SplitFilename83(const std::string& filename, std::array<char, 9>& short_nam
             short_name[7] = '1';
             break;
         }
-        short_name[j++] = toupper(letter);
+        short_name[j++] = Common::ToUpper(letter);
     }
 
     // Get extension.
     if (point != std::string::npos) {
         j = 0;
         for (char letter : filename.substr(point + 1, 3))
-            extension[j++] = toupper(letter);
+            extension[j++] = Common::ToUpper(letter);
     }
 }
 
@@ -960,7 +967,7 @@ std::string_view GetFilename(std::string_view path) {
     const auto name_index = path.find_last_of("\\/");
 
     if (name_index == std::string_view::npos) {
-        return {};
+        return path;
     }
 
     return path.substr(name_index + 1);

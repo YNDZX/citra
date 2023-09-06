@@ -4,9 +4,8 @@
 
 #include <algorithm>
 #include <array>
-#include <cinttypes>
-#include <map>
 #include <fmt/format.h>
+#include "common/archives.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
@@ -40,7 +39,6 @@
 #include "core/hle/lock.h"
 #include "core/hle/result.h"
 #include "core/hle/service/plgldr/plgldr.h"
-#include "core/hle/service/service.h"
 
 namespace Kernel {
 
@@ -371,6 +369,7 @@ private:
     ResultCode ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32 operation,
                              u32 permissions);
     void ExitProcess();
+    ResultCode TerminateProcess(Handle handle);
     ResultCode MapMemoryBlock(Handle handle, u32 addr, u32 permissions, u32 other_permissions);
     ResultCode UnmapMemoryBlock(Handle handle, u32 addr);
     ResultCode ConnectToPort(Handle* out_handle, VAddr port_name_address);
@@ -531,45 +530,24 @@ ResultCode SVC::ControlMemory(u32* out_addr, u32 addr0, u32 addr1, u32 size, u32
         return ERR_INVALID_COMBINATION;
     }
 
-    process.vm_manager.LogLayout(Log::Level::Trace);
+    process.vm_manager.LogLayout(Common::Log::Level::Trace);
 
     return RESULT_SUCCESS;
 }
 
 void SVC::ExitProcess() {
-    std::shared_ptr<Process> current_process = kernel.GetCurrentProcess();
-    LOG_INFO(Kernel_SVC, "Process {} exiting", current_process->process_id);
+    kernel.TerminateProcess(kernel.GetCurrentProcess());
+}
 
-    ASSERT_MSG(current_process->status == ProcessStatus::Running, "Process has already exited");
-
-    current_process->status = ProcessStatus::Exited;
-
-    // Stop all the process threads that are currently waiting for objects.
-    auto& thread_list = kernel.GetCurrentThreadManager().GetThreadList();
-    for (auto& thread : thread_list) {
-        if (thread->owner_process.lock() != current_process)
-            continue;
-
-        if (thread.get() == kernel.GetCurrentThreadManager().GetCurrentThread())
-            continue;
-
-        // TODO(Subv): When are the other running/ready threads terminated?
-        ASSERT_MSG(thread->status == ThreadStatus::WaitSynchAny ||
-                       thread->status == ThreadStatus::WaitSynchAll,
-                   "Exiting processes with non-waiting threads is currently unimplemented");
-
-        thread->Stop();
+ResultCode SVC::TerminateProcess(Handle handle) {
+    std::shared_ptr<Process> process =
+        kernel.GetCurrentProcess()->handle_table.Get<Process>(handle);
+    if (process == nullptr) {
+        return ERR_INVALID_HANDLE;
     }
 
-    current_process->Exit();
-
-    // Kill the current thread
-    kernel.GetCurrentThreadManager().GetCurrentThread()->Stop();
-
-    // Remove kernel reference to process so it can be cleaned up.
-    kernel.RemoveProcess(current_process);
-
-    system.PrepareReschedule();
+    kernel.TerminateProcess(process);
+    return RESULT_SUCCESS;
 }
 
 /// Maps a memory block to specified address
@@ -676,7 +654,7 @@ ResultCode SVC::OpenProcess(Handle* out_handle, u32 process_id) {
         return ResultCode(24, ErrorModule::OS, ErrorSummary::WrongArgument, ErrorLevel::Permanent);
     }
     auto result_handle = kernel.GetCurrentProcess()->handle_table.Create(process);
-    if (result_handle.empty()) {
+    if (!result_handle) {
         return result_handle.Code();
     }
     *out_handle = result_handle.Unwrap();
@@ -697,11 +675,11 @@ ResultCode SVC::OpenThread(Handle* out_handle, Handle process_handle, u32 thread
     }
 
     for (u32 core_id = 0; core_id < system.GetNumCores(); core_id++) {
-        auto& thread_list = kernel.GetThreadManager(core_id).GetThreadList();
+        const auto thread_list = kernel.GetThreadManager(core_id).GetThreadList();
         for (auto& thread : thread_list) {
             if (thread->owner_process.lock() == process && thread.get()->thread_id == thread_id) {
                 auto result_handle = kernel.GetCurrentProcess()->handle_table.Create(thread);
-                if (result_handle.empty()) {
+                if (!result_handle) {
                     return result_handle.Code();
                 }
                 *out_handle = result_handle.Unwrap();
@@ -1150,7 +1128,7 @@ void SVC::OutputDebugString(VAddr address, s32 len) {
     }
 
     if (len == 0) {
-        GDBStub::SetHioRequest(address);
+        GDBStub::SetHioRequest(system, address);
         return;
     }
 
@@ -1690,7 +1668,7 @@ ResultCode SVC::CreateMemoryBlock(Handle* out_handle, u32 addr, u32 size, u32 my
 
     CASCADE_RESULT(shared_memory,
                    kernel.CreateSharedMemory(
-                       current_process.get(), size, static_cast<MemoryPermission>(my_permission),
+                       current_process, size, static_cast<MemoryPermission>(my_permission),
                        static_cast<MemoryPermission>(other_permission), addr, region));
     CASCADE_RESULT(*out_handle, current_process->handle_table.Create(std::move(shared_memory)));
 
@@ -1962,7 +1940,7 @@ ResultCode SVC::GetProcessList(s32* process_count, VAddr out_process_array,
     }
 
     s32 written = 0;
-    for (const auto process : kernel.GetProcessList()) {
+    for (const auto& process : kernel.GetProcessList()) {
         if (written >= out_process_array_count) {
             break;
         }
@@ -1975,12 +1953,12 @@ ResultCode SVC::GetProcessList(s32* process_count, VAddr out_process_array,
 }
 
 ResultCode SVC::InvalidateInstructionCacheRange(u32 addr, u32 size) {
-    Core::GetRunningCore().InvalidateCacheRange(addr, size);
+    system.GetRunningCore().InvalidateCacheRange(addr, size);
     return RESULT_SUCCESS;
 }
 
 ResultCode SVC::InvalidateEntireInstructionCache() {
-    Core::GetRunningCore().ClearInstructionCache();
+    system.GetRunningCore().ClearInstructionCache();
     return RESULT_SUCCESS;
 }
 
@@ -2094,7 +2072,7 @@ ResultCode SVC::ControlProcess(Handle process_handle, u32 process_OP, u32 varg2,
     }
     case ControlProcessOP::PROCESSOP_SCHEDULE_THREADS_WITHOUT_TLS_MAGIC: {
         for (u32 core_id = 0; core_id < system.GetNumCores(); core_id++) {
-            auto& thread_list = kernel.GetThreadManager(core_id).GetThreadList();
+            const auto thread_list = kernel.GetThreadManager(core_id).GetThreadList();
             for (auto& thread : thread_list) {
                 if (thread->owner_process.lock() != process) {
                     continue;
@@ -2244,7 +2222,7 @@ const std::array<SVC::FunctionDef, 180> SVC::SVC_Table{{
     {0x73, nullptr, "CreateCodeSet"},
     {0x74, nullptr, "RandomStub"},
     {0x75, nullptr, "CreateProcess"},
-    {0x76, nullptr, "TerminateProcess"},
+    {0x76, &SVC::Wrap<&SVC::TerminateProcess>, "TerminateProcess"},
     {0x77, nullptr, "SetProcessResourceLimits"},
     {0x78, nullptr, "CreateResourceLimit"},
     {0x79, nullptr, "SetResourceLimitValues"},

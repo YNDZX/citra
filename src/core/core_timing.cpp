@@ -3,7 +3,6 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <cinttypes>
 #include <tuple>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -172,22 +171,6 @@ void Timing::Timer::MoveEvents() {
         event_queue.emplace_back(std::move(ev));
         std::push_heap(event_queue.begin(), event_queue.end(), std::greater<>());
     }
-}
-
-u32 Timing::Timer::StartAdjust() {
-    ASSERT((adjust_value_curr_handle & 1) == 0); // Should always be even
-    adjust_value_last = std::chrono::steady_clock::now();
-    return ++adjust_value_curr_handle;
-}
-
-void Timing::Timer::EndAdjust(u32 start_adjust_handle) {
-    std::chrono::time_point<std::chrono::steady_clock> new_timer = std::chrono::steady_clock::now();
-    ASSERT(new_timer >= adjust_value_last && start_adjust_handle == adjust_value_curr_handle);
-    AddTicks(nsToCycles(static_cast<float>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(new_timer - adjust_value_last)
-            .count() /
-        cpu_clock_scale)));
-    ++adjust_value_curr_handle;
 }
 
 s64 Timing::Timer::GetMaxSliceLength() const {

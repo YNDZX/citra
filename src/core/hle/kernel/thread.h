@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -111,12 +112,17 @@ public:
     void ExitCurrentThread();
 
     /**
+     * Terminates all threads belonging to a specific process.
+     */
+    void TerminateProcessThreads(std::shared_ptr<Process> process);
+
+    /**
      * Get a const reference to the thread list for debug use
      */
-    const std::vector<std::shared_ptr<Thread>>& GetThreadList();
+    std::span<const std::shared_ptr<Thread>> GetThreadList();
 
-    void SetCPU(ARM_Interface& cpu) {
-        this->cpu = &cpu;
+    void SetCPU(ARM_Interface& cpu_) {
+        cpu = &cpu_;
     }
 
     std::unique_ptr<ARM_Interface::ThreadContext> NewContext() {

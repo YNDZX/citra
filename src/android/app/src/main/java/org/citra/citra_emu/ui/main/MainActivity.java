@@ -1,7 +1,10 @@
 package org.citra.citra_emu.ui.main;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuInflater;
@@ -13,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.content.ContextCompat;
 import androidx.core.splashscreen.SplashScreen;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import java.util.Collections;
@@ -20,10 +24,15 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.work.Data;
+import androidx.work.ExistingWorkPolicy;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.OutOfQuotaPolicy;
+import androidx.work.WorkManager;
+import androidx.work.WorkRequest;
 
 import com.google.android.material.appbar.AppBarLayout;
 
-import org.citra.citra_emu.NativeLibrary;
 import org.citra.citra_emu.R;
 import org.citra.citra_emu.activities.EmulationActivity;
 import org.citra.citra_emu.contracts.OpenFileResultContract;
@@ -32,6 +41,7 @@ import org.citra.citra_emu.model.GameProvider;
 import org.citra.citra_emu.ui.platform.PlatformGamesFragment;
 import org.citra.citra_emu.utils.AddDirectoryHelper;
 import org.citra.citra_emu.utils.BillingManager;
+import org.citra.citra_emu.utils.CiaInstallWorker;
 import org.citra.citra_emu.utils.CitraDirectoryHelper;
 import org.citra.citra_emu.utils.DirectoryInitialization;
 import org.citra.citra_emu.utils.FileBrowserHelper;
@@ -50,7 +60,9 @@ public final class MainActivity extends AppCompatActivity implements MainView {
     private int mFrameLayoutId;
     private PlatformGamesFragment mPlatformGamesFragment;
 
-    private MainPresenter mPresenter = new MainPresenter(this);
+    private final MainPresenter mPresenter = new MainPresenter(this);
+
+    // private final CiaInstallWorker mCiaInstallWorker = new CiaInstallWorker();
 
     // Singleton to manage user billing state
     private static BillingManager mBillingManager;
@@ -91,7 +103,7 @@ public final class MainActivity extends AppCompatActivity implements MainView {
             mPresenter.onDirectorySelected(result.toString());
         });
 
-    private final ActivityResultLauncher<Boolean> mOpenFileLauncher =
+    private final ActivityResultLauncher<Boolean> mInstallCiaFileLauncher =
         registerForActivityResult(new OpenFileResultContract(), result -> {
             if (result == null)
                 return;
@@ -104,9 +116,20 @@ public final class MainActivity extends AppCompatActivity implements MainView {
                     .show();
                 return;
             }
-            NativeLibrary.InstallCIAS(selectedFiles);
-            mPresenter.refreshGameList();
+            WorkManager workManager = WorkManager.getInstance(getApplicationContext());
+            workManager.enqueueUniqueWork("installCiaWork", ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    new OneTimeWorkRequest.Builder(CiaInstallWorker.class)
+                            .setInputData(
+                                    new Data.Builder().putStringArray("CIA_FILES", selectedFiles)
+                                            .build()
+                            )
+                            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                            .build()
+            );
         });
+
+    private final ActivityResultLauncher<String> requestNotificationPermissionLauncher =
+        registerForActivityResult(new ActivityResultContracts.RequestPermission(), isGranted -> { });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -149,6 +172,12 @@ public final class MainActivity extends AppCompatActivity implements MainView {
         EmulationActivity.tryDismissRunningNotification(this);
 
         setInsets();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+            }
+        }
     }
 
     @Override
@@ -233,7 +262,7 @@ public final class MainActivity extends AppCompatActivity implements MainView {
                 mOpenGameListLauncher.launch(null);
                 break;
                 case MainPresenter.REQUEST_INSTALL_CIA:
-                mOpenFileLauncher.launch(true);
+                mInstallCiaFileLauncher.launch(true);
                 break;
             }
         } else {

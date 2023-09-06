@@ -6,9 +6,7 @@
 
 #include <atomic>
 #include <functional>
-#include <iostream>
 #include <memory>
-#include "core/frontend/emu_window.h"
 
 namespace Frontend {
 class EmuWindow;
@@ -22,9 +20,6 @@ namespace Memory {
 class MemorySystem;
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Video Core namespace
-
 namespace VideoCore {
 
 class RendererBase;
@@ -35,7 +30,6 @@ extern std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
 // qt ui)
 extern std::atomic<bool> g_shader_jit_enabled;
 extern std::atomic<bool> g_hw_shader_enabled;
-extern std::atomic<bool> g_separable_shader_enabled;
 extern std::atomic<bool> g_hw_shader_accurate_mul;
 
 extern Memory::MemorySystem* g_memory;

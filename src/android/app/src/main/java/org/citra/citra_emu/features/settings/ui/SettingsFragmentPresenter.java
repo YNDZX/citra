@@ -168,9 +168,8 @@ public final class SettingsFragmentPresenter {
             sl.add(new PremiumSingleChoiceSetting(SettingsFile.KEY_DESIGN, Settings.SECTION_PREMIUM, R.string.design, 0, R.array.designNamesOld, R.array.designValuesOld, 0, design, mView));
         }
 
-        String[] textureFilterNames = NativeLibrary.GetTextureFilterNames();
         Setting textureFilterName = premiumSection.getSetting(SettingsFile.KEY_TEXTURE_FILTER_NAME);
-        sl.add(new StringSingleChoiceSetting(SettingsFile.KEY_TEXTURE_FILTER_NAME, Settings.SECTION_PREMIUM, R.string.texture_filter_name, R.string.texture_filter_description, textureFilterNames, textureFilterNames, "none", textureFilterName));
+        sl.add(new SingleChoiceSetting(SettingsFile.KEY_TEXTURE_FILTER_NAME, Settings.SECTION_PREMIUM, R.string.texture_filter_name, 0, R.array.textureFilterNames, R.array.textureFilterValues, 0, textureFilterName));
     }
 
     private void addGeneralSettings(ArrayList<SettingsItem> sl) {
@@ -197,8 +196,12 @@ public final class SettingsFragmentPresenter {
 
         sl.add(new SingleChoiceSetting(SettingsFile.KEY_REGION_VALUE, Settings.SECTION_SYSTEM, R.string.emulated_region, 0, R.array.regionNames, R.array.regionValues, -1, region));
         sl.add(new SingleChoiceSetting(SettingsFile.KEY_LANGUAGE, Settings.SECTION_SYSTEM, R.string.emulated_language, 0, R.array.languageNames, R.array.languageValues, 1, language));
+
+        sl.add(new HeaderSetting(null, null, R.string.clock, 0));
         sl.add(new SingleChoiceSetting(SettingsFile.KEY_INIT_CLOCK, Settings.SECTION_SYSTEM, R.string.init_clock, R.string.init_clock_description, R.array.systemClockNames, R.array.systemClockValues, 0, systemClock));
         sl.add(new DateTimeSetting(SettingsFile.KEY_INIT_TIME, Settings.SECTION_SYSTEM, R.string.init_time, R.string.init_time_description, "2000-01-01 00:00:01", dateTime));
+
+        sl.add(new HeaderSetting(null, null, R.string.plugin_loader, 0));
         sl.add(new CheckBoxSetting(SettingsFile.KEY_PLUGIN_LOADER, Settings.SECTION_SYSTEM, R.string.plugin_loader, R.string.plugin_loader_description, false, pluginLoader));
         sl.add(new CheckBoxSetting(SettingsFile.KEY_ALLOW_PLUGIN_LOADER, Settings.SECTION_SYSTEM, R.string.allow_plugin_loader, R.string.allow_plugin_loader_description, true, allowPluginLoader));
     }
@@ -369,6 +372,7 @@ public final class SettingsFragmentPresenter {
         SettingSection utilitySection = mSettings.getSection(Settings.SECTION_UTILITY);
         Setting dumpTextures = utilitySection.getSetting(SettingsFile.KEY_DUMP_TEXTURES);
         Setting customTextures = utilitySection.getSetting(SettingsFile.KEY_CUSTOM_TEXTURES);
+        Setting asyncCustomLoading = utilitySection.getSetting(SettingsFile.KEY_ASYNC_CUSTOM_LOADING);
         //Setting preloadTextures = utilitySection.getSetting(SettingsFile.KEY_PRELOAD_TEXTURES);
 
         sl.add(new HeaderSetting(null, null, R.string.renderer, 0));
@@ -390,6 +394,7 @@ public final class SettingsFragmentPresenter {
         sl.add(new HeaderSetting(null, null, R.string.utility, 0));
         sl.add(new CheckBoxSetting(SettingsFile.KEY_DUMP_TEXTURES, Settings.SECTION_UTILITY, R.string.dump_textures, R.string.dump_textures_description, false, dumpTextures));
         sl.add(new CheckBoxSetting(SettingsFile.KEY_CUSTOM_TEXTURES, Settings.SECTION_UTILITY, R.string.custom_textures, R.string.custom_textures_description, false, customTextures));
+        sl.add(new CheckBoxSetting(SettingsFile.KEY_ASYNC_CUSTOM_LOADING, Settings.SECTION_UTILITY, R.string.async_custom_loading, R.string.async_custom_loading_description, true, asyncCustomLoading));
         //Disabled until custom texture implementation gets rewrite, current one overloads RAM and crashes Citra.
         //sl.add(new CheckBoxSetting(SettingsFile.KEY_PRELOAD_TEXTURES, Settings.SECTION_UTILITY, R.string.preload_textures, R.string.preload_textures_description, false, preloadTextures));
     }
@@ -399,10 +404,10 @@ public final class SettingsFragmentPresenter {
 
         SettingSection audioSection = mSettings.getSection(Settings.SECTION_AUDIO);
         Setting audioStretch = audioSection.getSetting(SettingsFile.KEY_ENABLE_AUDIO_STRETCHING);
-        Setting micInputType = audioSection.getSetting(SettingsFile.KEY_MIC_INPUT_TYPE);
+        Setting audioInputType = audioSection.getSetting(SettingsFile.KEY_AUDIO_INPUT_TYPE);
 
         sl.add(new CheckBoxSetting(SettingsFile.KEY_ENABLE_AUDIO_STRETCHING, Settings.SECTION_AUDIO, R.string.audio_stretch, R.string.audio_stretch_description, true, audioStretch));
-        sl.add(new SingleChoiceSetting(SettingsFile.KEY_MIC_INPUT_TYPE, Settings.SECTION_AUDIO, R.string.audio_input_type, 0, R.array.audioInputTypeNames, R.array.audioInputTypeValues, 1, micInputType));
+        sl.add(new SingleChoiceSetting(SettingsFile.KEY_AUDIO_INPUT_TYPE, Settings.SECTION_AUDIO, R.string.audio_input_type, 0, R.array.audioInputTypeNames, R.array.audioInputTypeValues, 0, audioInputType));
     }
 
     private void addDebugSettings(ArrayList<SettingsItem> sl) {

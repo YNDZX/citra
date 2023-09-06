@@ -7,8 +7,8 @@
 #include <sstream>
 #include <unordered_map>
 #include <inih/cpp/INIReader.h>
-
 #include "common/file_util.h"
+#include "common/logging/backend.h"
 #include "common/logging/log.h"
 #include "common/param_package.h"
 #include "common/settings.h"
@@ -140,7 +140,7 @@ void Config::ReadValues() {
     ReadSetting("Core", Settings::values.cpu_clock_percentage);
 
     // Premium
-    ReadSetting("Premium", Settings::values.texture_filter_name);
+    ReadSetting("Premium", Settings::values.texture_filter);
 
     // Renderer
     Settings::values.use_gles = sdl2_config->GetBoolean("Renderer", "use_gles", true);
@@ -195,15 +195,16 @@ void Config::ReadValues() {
     ReadSetting("Utility", Settings::values.dump_textures);
     ReadSetting("Utility", Settings::values.custom_textures);
     ReadSetting("Utility", Settings::values.preload_textures);
+    ReadSetting("Utility", Settings::values.async_custom_loading);
 
     // Audio
     ReadSetting("Audio", Settings::values.audio_emulation);
-    ReadSetting("Audio", Settings::values.sink_id);
     ReadSetting("Audio", Settings::values.enable_audio_stretching);
-    ReadSetting("Audio", Settings::values.audio_device_id);
     ReadSetting("Audio", Settings::values.volume);
-    ReadSetting("Audio", Settings::values.mic_input_device);
-    ReadSetting("Audio", Settings::values.mic_input_type);
+    ReadSetting("Audio", Settings::values.output_type);
+    ReadSetting("Audio", Settings::values.output_device);
+    ReadSetting("Audio", Settings::values.input_type);
+    ReadSetting("Audio", Settings::values.input_device);
 
     // Data Storage
     ReadSetting("Data Storage", Settings::values.use_virtual_sd);
@@ -259,6 +260,12 @@ void Config::ReadValues() {
     // Miscellaneous
     ReadSetting("Miscellaneous", Settings::values.log_filter);
 
+    // Apply the log_filter setting as the logger has already been initialized
+    // and doesn't pick up the filter on its own.
+    Common::Log::Filter filter;
+    filter.ParseFilterString(Settings::values.log_filter.GetValue());
+    Common::Log::SetGlobalFilter(filter);
+
     // Debugging
     Settings::values.record_frame_times =
         sdl2_config->GetBoolean("Debugging", "record_frame_times", false);
@@ -273,7 +280,7 @@ void Config::ReadValues() {
 
     // Web Service
     NetSettings::values.enable_telemetry =
-        sdl2_config->GetBoolean("WebService", "enable_telemetry", true);
+        sdl2_config->GetBoolean("WebService", "enable_telemetry", false);
     NetSettings::values.web_api_url =
         sdl2_config->GetString("WebService", "web_api_url", "https://api.citra-emu.org");
     NetSettings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");

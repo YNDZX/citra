@@ -10,11 +10,14 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "audio_core/input_details.h"
+#include "audio_core/sink_details.h"
 #include "common/common_types.h"
 #include "core/hle/service/cam/cam_params.h"
 
 namespace Settings {
 
+constexpr u32 GraphicsAPICount = 2;
 enum class GraphicsAPI {
     Software = 0,
     OpenGL = 1,
@@ -33,6 +36,7 @@ enum class LayoutOption : u32 {
 #ifndef ANDROID
     SeparateWindows,
 #endif
+    HybridScreen,
     // Similiar to default, but better for mobile devices in portrait mode. Top screen in clamped to
     // the top of the frame, and the bottom screen is enlarged to match the top screen.
     MobilePortrait,
@@ -40,12 +44,6 @@ enum class LayoutOption : u32 {
     // Similiar to LargeScreen, but better for mobile devices in landscape mode. The screens are
     // clamped to the top of the frame, and the bottom screen is a bit bigger.
     MobileLandscape,
-};
-
-enum class MicInputType : u32 {
-    None = 0,
-    Real = 1,
-    Static = 2,
 };
 
 enum class StereoRenderOption : u32 {
@@ -70,6 +68,16 @@ enum class AudioEmulation : u32 {
     LLEMultithreaded = 2,
 };
 
+enum class TextureFilter : u32 {
+    None = 0,
+    Anime4K = 1,
+    Bicubic = 2,
+    NearestNeighbor = 3,
+    ScaleForce = 4,
+    xBRZ = 5,
+    MMPX = 6
+};
+
 namespace NativeButton {
 
 enum Values {
@@ -92,13 +100,14 @@ enum Values {
     ZR,
 
     Home,
+    Power,
 
     NumButtons,
 };
 
 constexpr int BUTTON_HID_BEGIN = A;
 constexpr int BUTTON_IR_BEGIN = ZL;
-constexpr int BUTTON_NS_BEGIN = Home;
+constexpr int BUTTON_NS_BEGIN = Power;
 
 constexpr int BUTTON_HID_END = BUTTON_IR_BEGIN;
 constexpr int BUTTON_IR_END = BUTTON_NS_BEGIN;
@@ -126,6 +135,7 @@ static const std::array<const char*, NumButtons> mapping = {{
     "button_zl",
     "button_zr",
     "button_home",
+    "button_power",
 }};
 
 } // namespace NativeButton
@@ -420,18 +430,20 @@ struct Values {
     Setting<bool> allow_plugin_loader{true, "allow_plugin_loader"};
 
     // Renderer
-    SwitchableSetting<GraphicsAPI> graphics_api{GraphicsAPI::OpenGL, "graphics_api"};
+    SwitchableSetting<GraphicsAPI, true> graphics_api{
+        GraphicsAPI::OpenGL, GraphicsAPI::Software, static_cast<GraphicsAPI>(GraphicsAPICount - 1),
+        "graphics_api"};
     Setting<bool> use_gles{false, "use_gles"};
     Setting<bool> renderer_debug{false, "renderer_debug"};
+    Setting<bool> dump_command_buffers{false, "dump_command_buffers"};
     SwitchableSetting<bool> use_hw_shader{true, "use_hw_shader"};
-    SwitchableSetting<bool> separable_shader{false, "use_separable_shader"};
     SwitchableSetting<bool> use_disk_shader_cache{true, "use_disk_shader_cache"};
     SwitchableSetting<bool> shaders_accurate_mul{true, "shaders_accurate_mul"};
     SwitchableSetting<bool> use_vsync_new{true, "use_vsync_new"};
     Setting<bool> use_shader_jit{true, "use_shader_jit"};
     SwitchableSetting<u32, true> resolution_factor{1, 0, 10, "resolution_factor"};
     SwitchableSetting<u16, true> frame_limit{100, 0, 1000, "frame_limit"};
-    SwitchableSetting<std::string> texture_filter_name{"none", "texture_filter_name"};
+    SwitchableSetting<TextureFilter> texture_filter{TextureFilter::None, "texture_filter"};
 
     SwitchableSetting<LayoutOption> layout_option{LayoutOption::Default, "layout_option"};
     SwitchableSetting<bool> swap_screen{false, "swap_screen"};
@@ -449,9 +461,9 @@ struct Values {
     Setting<u16> custom_bottom_bottom{480, "custom_bottom_bottom"};
     Setting<u16> custom_second_layer_opacity{100, "custom_second_layer_opacity"};
 
-    SwitchableSetting<double> bg_red{0.f, "bg_red"};
-    SwitchableSetting<double> bg_green{0.f, "bg_green"};
-    SwitchableSetting<double> bg_blue{0.f, "bg_blue"};
+    SwitchableSetting<float> bg_red{0.f, "bg_red"};
+    SwitchableSetting<float> bg_green{0.f, "bg_green"};
+    SwitchableSetting<float> bg_blue{0.f, "bg_blue"};
 
     SwitchableSetting<StereoRenderOption> render_3d{StereoRenderOption::Off, "render_3d"};
     SwitchableSetting<u32> factor_3d{0, "factor_3d"};
@@ -469,16 +481,17 @@ struct Values {
     SwitchableSetting<bool> dump_textures{false, "dump_textures"};
     SwitchableSetting<bool> custom_textures{false, "custom_textures"};
     SwitchableSetting<bool> preload_textures{false, "preload_textures"};
+    SwitchableSetting<bool> async_custom_loading{true, "async_custom_loading"};
 
     // Audio
     bool audio_muted;
     SwitchableSetting<AudioEmulation> audio_emulation{AudioEmulation::HLE, "audio_emulation"};
-    Setting<std::string> sink_id{"auto", "output_engine"};
     SwitchableSetting<bool> enable_audio_stretching{true, "enable_audio_stretching"};
-    Setting<std::string> audio_device_id{"auto", "output_device"};
     SwitchableSetting<float, true> volume{1.f, 0.f, 1.f, "volume"};
-    Setting<MicInputType> mic_input_type{MicInputType::None, "mic_input_type"};
-    Setting<std::string> mic_input_device{"Default", "mic_input_device"};
+    Setting<AudioCore::SinkType> output_type{AudioCore::SinkType::Auto, "output_type"};
+    Setting<std::string> output_device{"auto", "output_device"};
+    Setting<AudioCore::InputType> input_type{AudioCore::InputType::Auto, "input_type"};
+    Setting<std::string> input_device{"auto", "input_device"};
 
     // Camera
     std::array<std::string, Service::CAM::NumCameras> camera_name;
@@ -514,7 +527,6 @@ void SetConfiguringGlobal(bool is_global);
 
 float Volume();
 
-void Apply();
 void LogSettings();
 
 // Restore the global state of all applicable settings in the Values struct

@@ -6,8 +6,8 @@
 
 #include <array>
 #include <cstdio>
-#include <fstream>
 #include <functional>
+#include <ios>
 #include <limits>
 #include <optional>
 #include <string>
@@ -191,7 +191,7 @@ void SetCurrentRomPath(const std::string& path);
 [[nodiscard]] const std::string& GetDefaultUserPath(UserPath path);
 
 // Update the Global Path with the new value
-const void UpdateUserPath(UserPath path, const std::string& filename);
+void UpdateUserPath(UserPath path, const std::string& filename);
 
 // Returns the path to where the sys file are
 [[nodiscard]] std::string GetSysDirectory();

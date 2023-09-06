@@ -6,6 +6,7 @@
 #include "common/assert.h"
 #include "common/settings.h"
 #include "core/telemetry_session.h"
+#include "video_core/custom_textures/custom_format.h"
 #include "video_core/renderer_opengl/gl_driver.h"
 
 namespace OpenGL {
@@ -43,6 +44,8 @@ inline std::string_view GetType(GLenum type) {
         RET(PERFORMANCE);
         RET(OTHER);
         RET(MARKER);
+        RET(POP_GROUP);
+        RET(PUSH_GROUP);
     default:
         UNREACHABLE();
     }
@@ -53,28 +56,29 @@ inline std::string_view GetType(GLenum type) {
 
 static void APIENTRY DebugHandler(GLenum source, GLenum type, GLuint id, GLenum severity,
                                   GLsizei length, const GLchar* message, const void* user_param) {
-    Log::Level level = Log::Level::Info;
+    auto level = Common::Log::Level::Info;
     switch (severity) {
     case GL_DEBUG_SEVERITY_HIGH:
-        level = Log::Level::Critical;
+        level = Common::Log::Level::Critical;
         break;
     case GL_DEBUG_SEVERITY_MEDIUM:
-        level = Log::Level::Warning;
+        level = Common::Log::Level::Warning;
         break;
     case GL_DEBUG_SEVERITY_NOTIFICATION:
     case GL_DEBUG_SEVERITY_LOW:
-        level = Log::Level::Debug;
+        level = Common::Log::Level::Debug;
         break;
     }
 
-    LOG_GENERIC(Log::Class::Render_OpenGL, level, "{} {} {}: {}", GetSource(source), GetType(type),
-                id, message);
+    LOG_GENERIC(Common::Log::Class::Render_OpenGL, level, "{} {} {}: {}", GetSource(source),
+                GetType(type), id, message);
 }
 
-Driver::Driver(Core::TelemetrySession& telemetry_session_) : telemetry_session{telemetry_session_} {
+Driver::Driver(Core::TelemetrySession& telemetry_session_)
+    : telemetry_session{telemetry_session_}, is_gles{Settings::values.use_gles.GetValue()} {
     const bool enable_debug = Settings::values.renderer_debug.GetValue();
     if (enable_debug) {
-        glEnable(GL_DEBUG_OUTPUT);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
         glDebugMessageCallback(DebugHandler, nullptr);
     }
 
@@ -88,6 +92,37 @@ Driver::~Driver() = default;
 
 bool Driver::HasBug(DriverBug bug) const {
     return True(bugs & bug);
+}
+
+bool Driver::HasDebugTool() {
+    GLint num_extensions;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &num_extensions);
+    for (GLuint index = 0; index < static_cast<GLuint>(num_extensions); ++index) {
+        const auto name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, index));
+        if (!std::strcmp(name, "GL_EXT_debug_tool")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Driver::IsCustomFormatSupported(VideoCore::CustomPixelFormat format) const {
+    switch (format) {
+    case VideoCore::CustomPixelFormat::RGBA8:
+        return true;
+    case VideoCore::CustomPixelFormat::BC1:
+    case VideoCore::CustomPixelFormat::BC3:
+    case VideoCore::CustomPixelFormat::BC5:
+        return ext_texture_compression_s3tc;
+    case VideoCore::CustomPixelFormat::BC7:
+        return arb_texture_compression_bptc;
+    case VideoCore::CustomPixelFormat::ASTC4:
+    case VideoCore::CustomPixelFormat::ASTC6:
+    case VideoCore::CustomPixelFormat::ASTC8:
+        return is_gles;
+    default:
+        return false;
+    }
 }
 
 void Driver::ReportDriverInfo() {
@@ -132,7 +167,12 @@ void Driver::CheckExtensionSupport() {
     arb_buffer_storage = GLAD_GL_ARB_buffer_storage;
     arb_clear_texture = GLAD_GL_ARB_clear_texture;
     arb_get_texture_sub_image = GLAD_GL_ARB_get_texture_sub_image;
+    arb_texture_compression_bptc = GLAD_GL_ARB_texture_compression_bptc;
     ext_clip_cull_distance = GLAD_GL_EXT_clip_cull_distance;
+    ext_texture_compression_s3tc = GLAD_GL_EXT_texture_compression_s3tc;
+    shader_framebuffer_fetch =
+        GLAD_GL_EXT_shader_framebuffer_fetch || GLAD_GL_ARM_shader_framebuffer_fetch;
+    blend_minmax_factor = GLAD_GL_AMD_blend_minmax_factor || GLAD_GL_NV_blend_minmax_factor;
     is_suitable = GLAD_GL_VERSION_4_3 || GLAD_GL_ES_VERSION_3_1;
 }
 
@@ -150,6 +190,10 @@ void Driver::FindBugs() {
 
     if (vendor == Vendor::AMD || (vendor == Vendor::Intel && !is_linux)) {
         bugs |= DriverBug::BrokenTextureView;
+    }
+
+    if (vendor == Vendor::Intel && !is_linux) {
+        bugs |= DriverBug::BrokenClearTexture;
     }
 }
 

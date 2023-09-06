@@ -21,20 +21,6 @@ namespace Core {
 class System;
 }
 
-namespace Frontend {
-
-struct Frame {
-    u32 width{};                      /// Width of the frame (to detect resize)
-    u32 height{};                     /// Height of the frame
-    bool color_reloaded = false;      /// Texture attachment was recreated (ie: resized)
-    OpenGL::OGLRenderbuffer color{};  /// Buffer shared between the render/present FBO
-    OpenGL::OGLFramebuffer render{};  /// FBO created on the render thread
-    OpenGL::OGLFramebuffer present{}; /// FBO created on the present thread
-    GLsync render_fence{};            /// Fence created on the render thread
-    GLsync present_fence{};           /// Fence created on the presentation thread
-};
-} // namespace Frontend
-
 namespace OpenGL {
 
 /// Structure used for storing information about the textures for each 3DS screen
@@ -60,8 +46,8 @@ public:
                             Frontend::EmuWindow* secondary_window);
     ~RendererOpenGL() override;
 
-    [[nodiscard]] VideoCore::RasterizerInterface* Rasterizer() const override {
-        return rasterizer.get();
+    [[nodiscard]] VideoCore::RasterizerInterface* Rasterizer() override {
+        return &rasterizer;
     }
 
     void SwapBuffers() override;
@@ -72,7 +58,6 @@ public:
 
 private:
     void InitOpenGLObjects();
-    void ReloadSampler();
     void ReloadShader();
     void PrepareRendertarget();
     void RenderScreenshot();
@@ -87,14 +72,11 @@ private:
                           const Common::Rectangle<u32>& bottom_screen);
     void DrawTopScreen(const Layout::FramebufferLayout& layout,
                        const Common::Rectangle<u32>& top_screen);
-    void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
-    void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
-    void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
-                                       const ScreenInfo& screen_info_r, float x, float y, float w,
-                                       float h);
+    void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h,
+                          Layout::DisplayOrientation orientation);
     void DrawSingleScreenStereo(const ScreenInfo& screen_info_l, const ScreenInfo& screen_info_r,
-                                float x, float y, float w, float h);
-    void UpdateFramerate();
+                                float x, float y, float w, float h,
+                                Layout::DisplayOrientation orientation);
 
     // Loads framebuffer from emulated memory into the display information structure
     void LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
@@ -104,17 +86,17 @@ private:
 
 private:
     Driver driver;
+    RasterizerOpenGL rasterizer;
     OpenGLState state;
-    std::unique_ptr<RasterizerOpenGL> rasterizer;
 
     // OpenGL object IDs
     OGLVertexArray vertex_array;
     OGLBuffer vertex_buffer;
     OGLProgram shader;
     OGLFramebuffer screenshot_framebuffer;
-    OGLSampler filter_sampler;
+    std::array<OGLSampler, 2> samplers;
 
-    /// Display information for top and bottom screens respectively
+    // Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;
 
     // Shader uniform location indices

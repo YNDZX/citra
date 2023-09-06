@@ -15,12 +15,12 @@
 #include <vector>
 #include <nihstro/shader_bytecode.h>
 #include <xbyak/xbyak.h>
-#include "common/bit_set.h"
 #include "common/common_types.h"
 #include "video_core/shader/shader.h"
 
 using nihstro::Instruction;
 using nihstro::OpCode;
+using nihstro::SourceRegister;
 using nihstro::SwizzlePattern;
 
 namespace Pica::Shader {

@@ -96,7 +96,7 @@ ResultVal<VAddr> VMManager::MapBackingMemoryToBase(VAddr base, u32 region_size, 
     if (result.Failed())
         return result.Code();
 
-    return MakeResult<VAddr>(target);
+    return target;
 }
 
 ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, MemoryRef memory,
@@ -115,7 +115,7 @@ ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, Memory
     final_vma.backing_memory = memory;
     UpdatePageTableForVMA(final_vma);
 
-    return MakeResult<VMAHandle>(MergeAdjacent(vma_handle));
+    return MergeAdjacent(vma_handle);
 }
 
 ResultVal<VMManager::VMAHandle> VMManager::MapMMIO(VAddr target, PAddr paddr, u32 size,
@@ -135,7 +135,7 @@ ResultVal<VMManager::VMAHandle> VMManager::MapMMIO(VAddr target, PAddr paddr, u3
     final_vma.mmio_handler = mmio_handler;
     UpdatePageTableForVMA(final_vma);
 
-    return MakeResult<VMAHandle>(MergeAdjacent(vma_handle));
+    return MergeAdjacent(vma_handle);
 }
 
 ResultCode VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expected_state,
@@ -239,10 +239,10 @@ ResultCode VMManager::ReprotectRange(VAddr target, u32 size, VMAPermission new_p
     return RESULT_SUCCESS;
 }
 
-void VMManager::LogLayout(Log::Level log_level) const {
+void VMManager::LogLayout(Common::Log::Level log_level) const {
     for (const auto& p : vma_map) {
         const VirtualMemoryArea& vma = p.second;
-        LOG_GENERIC(::Log::Class::Kernel, log_level, "{:08X} - {:08X}  size: {:8X} {}{}{} {}",
+        LOG_GENERIC(Common::Log::Class::Kernel, log_level, "{:08X} - {:08X}  size: {:8X} {}{}{} {}",
                     vma.base, vma.base + vma.size, vma.size,
                     (u8)vma.permissions & (u8)VMAPermission::Read ? 'R' : '-',
                     (u8)vma.permissions & (u8)VMAPermission::Write ? 'W' : '-',
@@ -294,7 +294,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMA(VAddr base, u32 size) {
         vma_handle = SplitVMA(vma_handle, start_in_vma);
     }
 
-    return MakeResult<VMAIter>(vma_handle);
+    return vma_handle;
 }
 
 ResultVal<VMManager::VMAIter> VMManager::CarveVMARange(VAddr target, u32 size) {
@@ -322,7 +322,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMARange(VAddr target, u32 size) {
         end_vma = SplitVMA(end_vma, target_end - end_vma->second.base);
     }
 
-    return MakeResult<VMAIter>(begin_vma);
+    return begin_vma;
 }
 
 VMManager::VMAIter VMManager::SplitVMA(VMAIter vma_handle, u32 offset_in_vma) {
@@ -391,9 +391,9 @@ void VMManager::UpdatePageTableForVMA(const VirtualMemoryArea& vma) {
         plgldr->OnMemoryChanged(process, Core::System::GetInstance().Kernel());
 }
 
-ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksForRange(VAddr address,
-                                                                                      u32 size) {
-    std::vector<std::pair<MemoryRef, u32>> backing_blocks;
+ResultVal<MemoryRegionInfo::IntervalSet> VMManager::GetBackingBlocksForRange(VAddr address,
+                                                                             u32 size) {
+    MemoryRegionInfo::IntervalSet backing_blocks;
     VAddr interval_target = address;
     while (interval_target != address + size) {
         auto vma = FindVMA(interval_target);
@@ -404,11 +404,13 @@ ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksFor
 
         VAddr interval_end = std::min(address + size, vma->second.base + vma->second.size);
         u32 interval_size = interval_end - interval_target;
-        auto backing_memory = vma->second.backing_memory + (interval_target - vma->second.base);
-        backing_blocks.push_back({backing_memory, interval_size});
+        auto backing_memory = memory.GetFCRAMOffset(vma->second.backing_memory +
+                                                    (interval_target - vma->second.base));
+        backing_blocks +=
+            MemoryRegionInfo::Interval(backing_memory, backing_memory + interval_size);
 
         interval_target += interval_size;
     }
-    return MakeResult(backing_blocks);
+    return backing_blocks;
 }
 } // namespace Kernel

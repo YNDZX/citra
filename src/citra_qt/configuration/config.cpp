@@ -4,13 +4,11 @@
 
 #include <algorithm>
 #include <array>
-#include <unordered_map>
 #include <QKeySequence>
 #include <QSettings>
 #include "citra_qt/configuration/config.h"
 #include "common/file_util.h"
 #include "common/settings.h"
-#include "core/frontend/mic.h"
 #include "core/hle/service/service.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
@@ -31,7 +29,7 @@ Config::~Config() {
 const std::array<int, Settings::NativeButton::NumButtons> Config::default_buttons = {
     Qt::Key_A, Qt::Key_S, Qt::Key_Z, Qt::Key_X, Qt::Key_T, Qt::Key_G,
     Qt::Key_F, Qt::Key_H, Qt::Key_Q, Qt::Key_W, Qt::Key_M, Qt::Key_N,
-    Qt::Key_O, Qt::Key_P, Qt::Key_1, Qt::Key_2, Qt::Key_B,
+    Qt::Key_O, Qt::Key_P, Qt::Key_1, Qt::Key_2, Qt::Key_B, Qt::Key_V,
 };
 
 const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> Config::default_analogs{{
@@ -56,7 +54,7 @@ const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> Config:
 // This must be in alphabetical order according to action name as it must have the same order as
 // UISetting::values.shortcuts, which is alphabetically ordered.
 // clang-format off
-const std::array<UISettings::Shortcut, 27> Config::default_hotkeys {{
+const std::array<UISettings::Shortcut, 28> Config::default_hotkeys {{
      {QStringLiteral("Advance Frame"),            QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::ApplicationShortcut}},
      {QStringLiteral("Capture Screenshot"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+P"), Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Continue/Pause Emulation"), QStringLiteral("Main Window"), {QStringLiteral("F4"),     Qt::WindowShortcut}},
@@ -84,6 +82,7 @@ const std::array<UISettings::Shortcut, 27> Config::default_hotkeys {{
      {QStringLiteral("Toggle Screen Layout"),     QStringLiteral("Main Window"), {QStringLiteral("F10"),    Qt::WindowShortcut}},
      {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), Qt::WindowShortcut}},
      {QStringLiteral("Toggle Texture Dumping"),   QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Custom Textures"),   QStringLiteral("Main Window"), {QStringLiteral("F7"),     Qt::ApplicationShortcut}},
     }};
 // clang-format on
 
@@ -275,10 +274,10 @@ void Config::ReadAudioValues() {
     ReadGlobalSetting(Settings::values.volume);
 
     if (global) {
-        ReadBasicSetting(Settings::values.sink_id);
-        ReadBasicSetting(Settings::values.audio_device_id);
-        ReadBasicSetting(Settings::values.mic_input_device);
-        ReadBasicSetting(Settings::values.mic_input_type);
+        ReadBasicSetting(Settings::values.output_type);
+        ReadBasicSetting(Settings::values.output_device);
+        ReadBasicSetting(Settings::values.input_type);
+        ReadBasicSetting(Settings::values.input_device);
     }
 
     qt_config->endGroup();
@@ -439,6 +438,7 @@ void Config::ReadUtilityValues() {
     ReadGlobalSetting(Settings::values.dump_textures);
     ReadGlobalSetting(Settings::values.custom_textures);
     ReadGlobalSetting(Settings::values.preload_textures);
+    ReadGlobalSetting(Settings::values.async_custom_loading);
 
     qt_config->endGroup();
 }
@@ -628,12 +628,6 @@ void Config::ReadRendererValues() {
 
     ReadGlobalSetting(Settings::values.graphics_api);
     ReadGlobalSetting(Settings::values.use_hw_shader);
-#ifdef __APPLE__
-    // Hardware shader is broken on macos with Intel GPUs thanks to poor drivers.
-    // We still want to provide this option for test/development purposes, but disable it by
-    // default.
-    ReadGlobalSetting(Settings::values.separable_shader);
-#endif
     ReadGlobalSetting(Settings::values.shaders_accurate_mul);
     ReadGlobalSetting(Settings::values.use_disk_shader_cache);
     ReadGlobalSetting(Settings::values.use_vsync_new);
@@ -644,7 +638,7 @@ void Config::ReadRendererValues() {
     ReadGlobalSetting(Settings::values.bg_green);
     ReadGlobalSetting(Settings::values.bg_blue);
 
-    ReadGlobalSetting(Settings::values.texture_filter_name);
+    ReadGlobalSetting(Settings::values.texture_filter);
 
     if (global) {
         ReadBasicSetting(Settings::values.use_shader_jit);
@@ -758,6 +752,7 @@ void Config::ReadUIValues() {
         ReadBasicSetting(UISettings::values.show_filter_bar);
         ReadBasicSetting(UISettings::values.show_status_bar);
         ReadBasicSetting(UISettings::values.confirm_before_closing);
+        ReadBasicSetting(UISettings::values.save_state_warning);
         ReadBasicSetting(UISettings::values.first_start);
         ReadBasicSetting(UISettings::values.callout_flags);
         ReadBasicSetting(UISettings::values.show_console);
@@ -776,6 +771,11 @@ void Config::ReadUIGameListValues() {
     ReadBasicSetting(UISettings::values.game_list_row_2);
     ReadBasicSetting(UISettings::values.game_list_hide_no_icon);
     ReadBasicSetting(UISettings::values.game_list_single_line_mode);
+
+    ReadBasicSetting(UISettings::values.show_compat_column);
+    ReadBasicSetting(UISettings::values.show_region_column);
+    ReadBasicSetting(UISettings::values.show_type_column);
+    ReadBasicSetting(UISettings::values.show_size_column);
 
     qt_config->endGroup();
 }
@@ -809,7 +809,7 @@ void Config::ReadWebServiceValues() {
     qt_config->beginGroup(QStringLiteral("WebService"));
 
     NetSettings::values.enable_telemetry =
-        ReadSetting(QStringLiteral("enable_telemetry"), true).toBool();
+        ReadSetting(QStringLiteral("enable_telemetry"), false).toBool();
     NetSettings::values.web_api_url =
         ReadSetting(QStringLiteral("web_api_url"), QStringLiteral("https://api.citra-emu.org"))
             .toString()
@@ -851,10 +851,10 @@ void Config::SaveAudioValues() {
     WriteGlobalSetting(Settings::values.volume);
 
     if (global) {
-        WriteBasicSetting(Settings::values.sink_id);
-        WriteBasicSetting(Settings::values.audio_device_id);
-        WriteBasicSetting(Settings::values.mic_input_device);
-        WriteBasicSetting(Settings::values.mic_input_type);
+        WriteBasicSetting(Settings::values.output_type);
+        WriteBasicSetting(Settings::values.output_device);
+        WriteBasicSetting(Settings::values.input_type);
+        WriteBasicSetting(Settings::values.input_device);
     }
 
     qt_config->endGroup();
@@ -955,6 +955,7 @@ void Config::SaveUtilityValues() {
     WriteGlobalSetting(Settings::values.dump_textures);
     WriteGlobalSetting(Settings::values.custom_textures);
     WriteGlobalSetting(Settings::values.preload_textures);
+    WriteGlobalSetting(Settings::values.async_custom_loading);
 
     qt_config->endGroup();
 }
@@ -1107,11 +1108,6 @@ void Config::SaveRendererValues() {
 
     WriteGlobalSetting(Settings::values.graphics_api);
     WriteGlobalSetting(Settings::values.use_hw_shader);
-#ifdef __APPLE__
-    // Hardware shader is broken on macos thanks to poor drivers.
-    // TODO: enable this for none Intel GPUs
-    WriteGlobalSetting(Settings::values.separable_shader);
-#endif
     WriteGlobalSetting(Settings::values.shaders_accurate_mul);
     WriteGlobalSetting(Settings::values.use_disk_shader_cache);
     WriteGlobalSetting(Settings::values.use_vsync_new);
@@ -1122,7 +1118,7 @@ void Config::SaveRendererValues() {
     WriteGlobalSetting(Settings::values.bg_green);
     WriteGlobalSetting(Settings::values.bg_blue);
 
-    WriteGlobalSetting(Settings::values.texture_filter_name);
+    WriteGlobalSetting(Settings::values.texture_filter);
 
     if (global) {
         WriteSetting(QStringLiteral("use_shader_jit"), Settings::values.use_shader_jit.GetValue(),
@@ -1219,6 +1215,7 @@ void Config::SaveUIValues() {
         WriteBasicSetting(UISettings::values.show_filter_bar);
         WriteBasicSetting(UISettings::values.show_status_bar);
         WriteBasicSetting(UISettings::values.confirm_before_closing);
+        WriteBasicSetting(UISettings::values.save_state_warning);
         WriteBasicSetting(UISettings::values.first_start);
         WriteBasicSetting(UISettings::values.callout_flags);
         WriteBasicSetting(UISettings::values.show_console);
@@ -1237,6 +1234,11 @@ void Config::SaveUIGameListValues() {
     WriteBasicSetting(UISettings::values.game_list_row_2);
     WriteBasicSetting(UISettings::values.game_list_hide_no_icon);
     WriteBasicSetting(UISettings::values.game_list_single_line_mode);
+
+    WriteBasicSetting(UISettings::values.show_compat_column);
+    WriteBasicSetting(UISettings::values.show_region_column);
+    WriteBasicSetting(UISettings::values.show_type_column);
+    WriteBasicSetting(UISettings::values.show_size_column);
 
     qt_config->endGroup();
 }

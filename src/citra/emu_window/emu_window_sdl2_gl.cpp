@@ -10,6 +10,7 @@
 #include <glad/glad.h>
 #include "citra/emu_window/emu_window_sdl2_gl.h"
 #include "common/scm_rev.h"
+#include "common/settings.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -41,8 +42,8 @@ private:
     SDL_GLContext context;
 };
 
-EmuWindow_SDL2_GL::EmuWindow_SDL2_GL(bool fullscreen, bool is_secondary)
-    : EmuWindow_SDL2{is_secondary} {
+EmuWindow_SDL2_GL::EmuWindow_SDL2_GL(Core::System& system_, bool fullscreen, bool is_secondary)
+    : EmuWindow_SDL2{system_, is_secondary} {
     // Initialize the window
     if (Settings::values.use_gles) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);

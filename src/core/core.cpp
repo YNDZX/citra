@@ -2,8 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <fstream>
-#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <boost/serialization/array.hpp>
@@ -12,9 +10,12 @@
 #include "audio_core/lle/lle.h"
 #include "common/arch.h"
 #include "common/logging/log.h"
-#include "common/texture.h"
+#include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/arm/exclusive_monitor.h"
+#include "core/hle/service/cam/cam.h"
+#include "core/hle/service/hid/hid.h"
+#include "core/hle/service/ir/ir_user.h"
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #endif
@@ -23,22 +24,20 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/dumping/backend.h"
-#ifdef ENABLE_FFMPEG_VIDEO_DUMPER
-#include "core/dumping/ffmpeg_backend.h"
-#endif
-#include "common/settings.h"
-#include "core/custom_tex_cache.h"
+#include "core/frontend/image_interface.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/global.h"
-#include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/apt/apt.h"
+#include "core/hle/service/cam/cam.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/hle/service/gsp/gsp.h"
-#include "core/hle/service/pm/pm_app.h"
+#include "core/hle/service/ir/ir_rst.h"
+#include "core/hle/service/mic/mic_u.h"
+#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hw/gpu.h"
@@ -46,8 +45,12 @@
 #include "core/hw/lcd.h"
 #include "core/loader/loader.h"
 #include "core/movie.h"
-#include "core/rpc/rpc_server.h"
+#ifdef ENABLE_SCRIPTING
+#include "core/rpc/server.h"
+#endif
+#include "core/telemetry_session.h"
 #include "network/network.h"
+#include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -70,6 +73,8 @@ Core::Timing& Global() {
     return System::GetInstance().CoreTiming();
 }
 
+System::System() : movie{*this} {}
+
 System::~System() = default;
 
 System::ResultStatus System::RunLoop(bool tight_loop) {
@@ -83,7 +88,7 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
         if (thread && running_core) {
             running_core->SaveContext(thread->context);
         }
-        GDBStub::HandlePacket();
+        GDBStub::HandlePacket(*this);
 
         // If the loop is halted and we want to step, use a tiny (1) number of instructions to
         // execute. Otherwise, get out of the loop function.
@@ -257,14 +262,13 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
         LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
         return ResultStatus::ErrorGetLoader;
     }
-    std::pair<std::optional<u32>, Loader::ResultStatus> system_mode =
-        app_loader->LoadKernelSystemMode();
 
-    if (system_mode.second != Loader::ResultStatus::Success) {
+    auto memory_mode = app_loader->LoadKernelMemoryMode();
+    if (memory_mode.second != Loader::ResultStatus::Success) {
         LOG_CRITICAL(Core, "Failed to determine system mode (Error {})!",
-                     static_cast<int>(system_mode.second));
+                     static_cast<int>(memory_mode.second));
 
-        switch (system_mode.second) {
+        switch (memory_mode.second) {
         case Loader::ResultStatus::ErrorEncrypted:
             return ResultStatus::ErrorLoader_ErrorEncrypted;
         case Loader::ResultStatus::ErrorInvalidFormat:
@@ -276,15 +280,15 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
         }
     }
 
-    ASSERT(system_mode.first);
-    auto n3ds_mode = app_loader->LoadKernelN3dsMode();
-    ASSERT(n3ds_mode.first);
+    ASSERT(memory_mode.first);
+    auto n3ds_hw_caps = app_loader->LoadNew3dsHwCapabilities();
+    ASSERT(n3ds_hw_caps.first);
     u32 num_cores = 2;
     if (Settings::values.is_new_3ds) {
         num_cores = 4;
     }
     ResultStatus init_result{
-        Init(emu_window, secondary_window, *system_mode.first, *n3ds_mode.first, num_cores)};
+        Init(emu_window, secondary_window, *memory_mode.first, *n3ds_hw_caps.first, num_cores)};
     if (init_result != ResultStatus::Success) {
         LOG_CRITICAL(Core, "Failed to initialize system (Error {})!",
                      static_cast<u32>(init_result));
@@ -311,23 +315,19 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
         }
     }
     kernel->SetCurrentProcess(process);
-    cheat_engine = std::make_unique<Cheats::CheatEngine>(*this);
     title_id = 0;
     if (app_loader->ReadProgramId(title_id) != Loader::ResultStatus::Success) {
         LOG_ERROR(Core, "Failed to find title id for ROM (Error {})",
                   static_cast<u32>(load_result));
     }
+    cheat_engine = std::make_unique<Cheats::CheatEngine>(title_id, *this);
     perf_stats = std::make_unique<PerfStats>(title_id);
-    custom_tex_cache = std::make_unique<Core::CustomTexCache>();
 
-    if (Settings::values.custom_textures) {
-        const u64 program_id = Kernel().GetCurrentProcess()->codeset->program_id;
-        FileUtil::CreateFullPath(fmt::format(
-            "{}textures/{:016X}/", FileUtil::GetUserPath(FileUtil::UserPath::LoadDir), program_id));
-        custom_tex_cache->FindCustomTextures(program_id);
+    if (Settings::values.dump_textures) {
+        custom_tex_manager->PrepareDumping(title_id);
     }
-    if (Settings::values.preload_textures) {
-        custom_tex_cache->PreloadTextures(*GetImageInterface());
+    if (Settings::values.custom_textures) {
+        custom_tex_manager->FindCustomTextures();
     }
 
     status = ResultStatus::Success;
@@ -365,18 +365,21 @@ void System::Reschedule() {
 }
 
 System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
-                                  Frontend::EmuWindow* secondary_window, u32 system_mode,
-                                  u8 n3ds_mode, u32 num_cores) {
+                                  Frontend::EmuWindow* secondary_window,
+                                  Kernel::MemoryMode memory_mode,
+                                  const Kernel::New3dsHwCapabilities& n3ds_hw_caps, u32 num_cores) {
     LOG_DEBUG(HW_Memory, "initialized OK");
 
-    memory = std::make_unique<Memory::MemorySystem>();
+    memory = std::make_unique<Memory::MemorySystem>(*this);
 
     timing = std::make_unique<Timing>(num_cores, Settings::values.cpu_clock_percentage.GetValue());
 
     kernel = std::make_unique<Kernel::KernelSystem>(
-        *memory, *timing, [this] { PrepareReschedule(); }, system_mode, num_cores, n3ds_mode);
+        *memory, *timing, [this] { PrepareReschedule(); }, memory_mode, num_cores, n3ds_hw_caps,
+        movie.GetOverrideInitTime());
 
     exclusive_monitor = MakeExclusiveMonitor(*memory, num_cores);
+    cpu_cores.reserve(num_cores);
     if (Settings::values.use_cpu_jit) {
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
         for (u32 i = 0; i < num_cores; ++i) {
@@ -403,21 +406,23 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     const auto audio_emulation = Settings::values.audio_emulation.GetValue();
     if (audio_emulation == Settings::AudioEmulation::HLE) {
-        dsp_core = std::make_unique<AudioCore::DspHle>(*memory);
+        dsp_core = std::make_unique<AudioCore::DspHle>(*memory, *timing);
     } else {
         const bool multithread = audio_emulation == Settings::AudioEmulation::LLEMultithreaded;
-        dsp_core = std::make_unique<AudioCore::DspLle>(*memory, multithread);
+        dsp_core = std::make_unique<AudioCore::DspLle>(*memory, *timing, multithread);
     }
 
     memory->SetDSP(*dsp_core);
 
-    dsp_core->SetSink(Settings::values.sink_id.GetValue(),
-                      Settings::values.audio_device_id.GetValue());
+    dsp_core->SetSink(Settings::values.output_type.GetValue(),
+                      Settings::values.output_device.GetValue());
     dsp_core->EnableStretching(Settings::values.enable_audio_stretching.GetValue());
 
     telemetry_session = std::make_unique<Core::TelemetrySession>();
 
-    rpc_server = std::make_unique<RPC::RPCServer>();
+#ifdef ENABLE_SCRIPTING
+    rpc_server = std::make_unique<RPC::Server>(*this);
+#endif
 
     service_manager = std::make_unique<Service::SM::ServiceManager>(*this);
     archive_manager = std::make_unique<Service::FS::ArchiveManager>(*this);
@@ -426,11 +431,11 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
     Service::Init(*this);
     GDBStub::DeferStart();
 
-#ifdef ENABLE_FFMPEG_VIDEO_DUMPER
-    video_dumper = std::make_unique<VideoDumper::FFmpegBackend>();
-#else
-    video_dumper = std::make_unique<VideoDumper::NullBackend>();
-#endif
+    if (!registered_image_interface) {
+        registered_image_interface = std::make_shared<Frontend::ImageInterface>();
+    }
+
+    custom_tex_manager = std::make_unique<VideoCore::CustomTexManager>(*this);
 
     VideoCore::Init(emu_window, secondary_window, *this);
 
@@ -497,20 +502,24 @@ const Cheats::CheatEngine& System::CheatEngine() const {
     return *cheat_engine;
 }
 
-VideoDumper::Backend& System::VideoDumper() {
-    return *video_dumper;
+void System::RegisterVideoDumper(std::shared_ptr<VideoDumper::Backend> dumper) {
+    video_dumper = std::move(dumper);
 }
 
-const VideoDumper::Backend& System::VideoDumper() const {
-    return *video_dumper;
+VideoCore::CustomTexManager& System::CustomTexManager() {
+    return *custom_tex_manager;
 }
 
-Core::CustomTexCache& System::CustomTexCache() {
-    return *custom_tex_cache;
+const VideoCore::CustomTexManager& System::CustomTexManager() const {
+    return *custom_tex_manager;
 }
 
-const Core::CustomTexCache& System::CustomTexCache() const {
-    return *custom_tex_cache;
+Core::Movie& System::Movie() {
+    return movie;
+}
+
+const Core::Movie& System::Movie() const {
+    return movie;
 }
 
 void System::RegisterMiiSelector(std::shared_ptr<Frontend::MiiSelector> mii_selector) {
@@ -548,8 +557,11 @@ void System::Shutdown(bool is_deserializing) {
         cheat_engine.reset();
         app_loader.reset();
     }
+    custom_tex_manager.reset();
     telemetry_session.reset();
+#ifdef ENABLE_SCRIPTING
     rpc_server.reset();
+#endif
     archive_manager.reset();
     service_manager.reset();
     dsp_core.reset();
@@ -604,6 +616,62 @@ void System::Reset() {
     }
 }
 
+void System::ApplySettings() {
+    GDBStub::SetServerPort(Settings::values.gdbstub_port.GetValue());
+    GDBStub::ToggleServer(Settings::values.use_gdbstub.GetValue());
+
+    VideoCore::g_shader_jit_enabled = Settings::values.use_shader_jit.GetValue();
+    VideoCore::g_hw_shader_enabled = Settings::values.use_hw_shader.GetValue();
+    VideoCore::g_hw_shader_accurate_mul = Settings::values.shaders_accurate_mul.GetValue();
+
+#ifndef ANDROID
+    if (VideoCore::g_renderer) {
+        VideoCore::g_renderer->UpdateCurrentFramebufferLayout();
+    }
+#endif
+
+    if (VideoCore::g_renderer) {
+        auto& settings = VideoCore::g_renderer->Settings();
+        settings.bg_color_update_requested = true;
+        settings.shader_update_requested = true;
+    }
+
+    if (IsPoweredOn()) {
+        CoreTiming().UpdateClockSpeed(Settings::values.cpu_clock_percentage.GetValue());
+        dsp_core->SetSink(Settings::values.output_type.GetValue(),
+                          Settings::values.output_device.GetValue());
+        dsp_core->EnableStretching(Settings::values.enable_audio_stretching.GetValue());
+
+        auto hid = Service::HID::GetModule(*this);
+        if (hid) {
+            hid->ReloadInputDevices();
+        }
+
+        auto apt = Service::APT::GetModule(*this);
+        if (apt) {
+            apt->GetAppletManager()->ReloadInputDevices();
+        }
+
+        auto ir_user = service_manager->GetService<Service::IR::IR_USER>("ir:USER");
+        if (ir_user)
+            ir_user->ReloadInputDevices();
+        auto ir_rst = service_manager->GetService<Service::IR::IR_RST>("ir:rst");
+        if (ir_rst)
+            ir_rst->ReloadInputDevices();
+
+        auto cam = Service::CAM::GetModule(*this);
+        if (cam) {
+            cam->ReloadCameraDevices();
+        }
+
+        Service::MIC::ReloadMic(*this);
+    }
+
+    Service::PLGLDR::PLG_LDR::SetEnabled(Settings::values.plugin_loader_enabled.GetValue());
+    Service::PLGLDR::PLG_LDR::SetAllowGameChangeState(
+        Settings::values.allow_plugin_loader.GetValue());
+}
+
 template <class Archive>
 void System::serialize(Archive& ar, const unsigned int file_version) {
 
@@ -619,10 +687,10 @@ void System::serialize(Archive& ar, const unsigned int file_version) {
         Shutdown(true);
 
         // Re-initialize everything like it was before
-        auto system_mode = this->app_loader->LoadKernelSystemMode();
-        auto n3ds_mode = this->app_loader->LoadKernelN3dsMode();
+        auto memory_mode = this->app_loader->LoadKernelMemoryMode();
+        auto n3ds_hw_caps = this->app_loader->LoadNew3dsHwCapabilities();
         [[maybe_unused]] const System::ResultStatus result = Init(
-            *m_emu_window, m_secondary_window, *system_mode.first, *n3ds_mode.first, num_cores);
+            *m_emu_window, m_secondary_window, *memory_mode.first, *n3ds_hw_caps.first, num_cores);
     }
 
     // flush on save, don't flush on load
@@ -650,7 +718,7 @@ void System::serialize(Archive& ar, const unsigned int file_version) {
     ar&* kernel.get();
     VideoCore::serialize(ar, file_version);
     if (file_version >= 1) {
-        ar& Movie::GetInstance();
+        ar& movie;
     }
 
     // This needs to be set from somewhere - might as well be here!

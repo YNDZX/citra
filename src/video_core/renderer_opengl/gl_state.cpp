@@ -2,9 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <glad/glad.h>
-#include "common/common_funcs.h"
-#include "common/logging/log.h"
+#include "common/common_types.h"
 #include "video_core/renderer_opengl/gl_state.h"
 #include "video_core/renderer_opengl/gl_vars.h"
 
@@ -247,6 +245,12 @@ void OpenGLState::Apply() const {
         cur_state.texture_buffer_lut_rgba.texture_buffer) {
         glActiveTexture(TextureUnits::TextureBufferLUT_RGBA.Enum());
         glBindTexture(GL_TEXTURE_BUFFER, texture_buffer_lut_rgba.texture_buffer);
+    }
+
+    // Color buffer
+    if (color_buffer.texture_2d != cur_state.color_buffer.texture_2d) {
+        glActiveTexture(TextureUnits::TextureColorBuffer.Enum());
+        glBindTexture(GL_TEXTURE_2D, color_buffer.texture_2d);
     }
 
     // Shadow Images

@@ -6,16 +6,14 @@
 #include <memory>
 #include <sstream>
 #include <type_traits>
-#include <unordered_map>
 #include <SDL.h>
 #include <inih/cpp/INIReader.h>
 #include "citra/config.h"
 #include "citra/default_ini.h"
 #include "common/file_util.h"
+#include "common/logging/backend.h"
 #include "common/logging/log.h"
-#include "common/param_package.h"
 #include "common/settings.h"
-#include "core/frontend/mic.h"
 #include "core/hle/service/service.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
@@ -89,7 +87,8 @@ void Config::ReadSetting(const std::string& group, Settings::Setting<bool>& sett
 template <typename Type, bool ranged>
 void Config::ReadSetting(const std::string& group, Settings::Setting<Type, ranged>& setting) {
     if constexpr (std::is_floating_point_v<Type>) {
-        setting = sdl2_config->GetReal(group, setting.GetLabel(), setting.GetDefault());
+        setting = static_cast<Type>(
+            sdl2_config->GetReal(group, setting.GetLabel(), setting.GetDefault()));
     } else {
         setting = static_cast<Type>(sdl2_config->GetInteger(
             group, setting.GetLabel(), static_cast<long>(setting.GetDefault())));
@@ -136,19 +135,13 @@ void Config::ReadValues() {
     ReadSetting("Renderer", Settings::values.graphics_api);
     ReadSetting("Renderer", Settings::values.use_gles);
     ReadSetting("Renderer", Settings::values.use_hw_shader);
-#ifdef __APPLE__
-    // Separable shader is broken on macos with Intel GPU thanks to poor drivers.
-    // We still want to provide this option for test/development purposes, but disable it by
-    // default.
-    ReadSetting("Renderer", Settings::values.separable_shader);
-#endif
     ReadSetting("Renderer", Settings::values.shaders_accurate_mul);
     ReadSetting("Renderer", Settings::values.use_shader_jit);
     ReadSetting("Renderer", Settings::values.resolution_factor);
     ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
     ReadSetting("Renderer", Settings::values.frame_limit);
     ReadSetting("Renderer", Settings::values.use_vsync_new);
-    ReadSetting("Renderer", Settings::values.texture_filter_name);
+    ReadSetting("Renderer", Settings::values.texture_filter);
 
     ReadSetting("Renderer", Settings::values.mono_render_option);
     ReadSetting("Renderer", Settings::values.render_3d);
@@ -181,15 +174,16 @@ void Config::ReadValues() {
     ReadSetting("Utility", Settings::values.dump_textures);
     ReadSetting("Utility", Settings::values.custom_textures);
     ReadSetting("Utility", Settings::values.preload_textures);
+    ReadSetting("Utility", Settings::values.async_custom_loading);
 
     // Audio
     ReadSetting("Audio", Settings::values.audio_emulation);
-    ReadSetting("Audio", Settings::values.sink_id);
     ReadSetting("Audio", Settings::values.enable_audio_stretching);
-    ReadSetting("Audio", Settings::values.audio_device_id);
     ReadSetting("Audio", Settings::values.volume);
-    ReadSetting("Audio", Settings::values.mic_input_device);
-    ReadSetting("Audio", Settings::values.mic_input_type);
+    ReadSetting("Audio", Settings::values.output_type);
+    ReadSetting("Audio", Settings::values.output_device);
+    ReadSetting("Audio", Settings::values.input_type);
+    ReadSetting("Audio", Settings::values.input_device);
 
     // Data Storage
     ReadSetting("Data Storage", Settings::values.use_virtual_sd);
@@ -305,6 +299,12 @@ void Config::ReadValues() {
     // Miscellaneous
     ReadSetting("Miscellaneous", Settings::values.log_filter);
 
+    // Apply the log_filter setting as the logger has already been initialized
+    // and doesn't pick up the filter on its own.
+    Common::Log::Filter filter;
+    filter.ParseFilterString(Settings::values.log_filter.GetValue());
+    Common::Log::SetGlobalFilter(filter);
+
     // Debugging
     Settings::values.record_frame_times =
         sdl2_config->GetBoolean("Debugging", "record_frame_times", false);
@@ -319,7 +319,7 @@ void Config::ReadValues() {
 
     // Web Service
     NetSettings::values.enable_telemetry =
-        sdl2_config->GetBoolean("WebService", "enable_telemetry", true);
+        sdl2_config->GetBoolean("WebService", "enable_telemetry", false);
     NetSettings::values.web_api_url =
         sdl2_config->GetString("WebService", "web_api_url", "https://api.citra-emu.org");
     NetSettings::values.citra_username = sdl2_config->GetString("WebService", "citra_username", "");

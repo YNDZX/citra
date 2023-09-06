@@ -26,6 +26,8 @@ constexpr TextureUnit TextureCube{6};
 constexpr TextureUnit TextureBufferLUT_LF{3};
 constexpr TextureUnit TextureBufferLUT_RG{4};
 constexpr TextureUnit TextureBufferLUT_RGBA{5};
+constexpr TextureUnit TextureNormalMap{7};
+constexpr TextureUnit TextureColorBuffer{10};
 
 } // namespace TextureUnits
 
@@ -114,14 +116,23 @@ public:
         GLuint texture_buffer; // GL_TEXTURE_BINDING_BUFFER
     } texture_buffer_lut_rgba;
 
+    struct {
+        GLuint texture_2d; // GL_TEXTURE_BINDING_2D
+    } color_buffer;
+
     // GL_IMAGE_BINDING_NAME
     GLuint image_shadow_buffer;
-    GLuint image_shadow_texture_px;
-    GLuint image_shadow_texture_nx;
-    GLuint image_shadow_texture_py;
-    GLuint image_shadow_texture_ny;
-    GLuint image_shadow_texture_pz;
-    GLuint image_shadow_texture_nz;
+    union {
+        std::array<GLuint, 6> image_shadow_texture;
+        struct {
+            GLuint image_shadow_texture_px;
+            GLuint image_shadow_texture_nx;
+            GLuint image_shadow_texture_py;
+            GLuint image_shadow_texture_ny;
+            GLuint image_shadow_texture_pz;
+            GLuint image_shadow_texture_nz;
+        };
+    };
 
     struct {
         GLuint read_framebuffer; // GL_READ_FRAMEBUFFER_BINDING
@@ -157,6 +168,14 @@ public:
     /// Get the currently active OpenGL state
     static OpenGLState GetCurState() {
         return cur_state;
+    }
+
+    bool EmulateColorBlend() const {
+        return blend.rgb_equation == GL_MIN || blend.rgb_equation == GL_MAX;
+    }
+
+    bool EmulateAlphaBlend() const {
+        return blend.a_equation == GL_MIN || blend.a_equation == GL_MAX;
     }
 
     /// Apply this state as the current OpenGL state

@@ -4,10 +4,11 @@
 
 #include <algorithm>
 #include <set>
+#include <span>
 #include <thread>
 #include <unordered_map>
 #include <variant>
-#include "common/scope_exit.h"
+#include "core/frontend/emu_window.h"
 #include "video_core/renderer_opengl/gl_driver.h"
 #include "video_core/renderer_opengl/gl_resource_manager.h"
 #include "video_core/renderer_opengl/gl_shader_disk_cache.h"
@@ -133,6 +134,7 @@ static void SetShaderSamplerBindings(GLuint shader) {
     SetShaderSamplerBinding(shader, "tex1", TextureUnits::PicaTexture(1));
     SetShaderSamplerBinding(shader, "tex2", TextureUnits::PicaTexture(2));
     SetShaderSamplerBinding(shader, "tex_cube", TextureUnits::TextureCube);
+    SetShaderSamplerBinding(shader, "tex_normal", TextureUnits::TextureNormalMap);
 
     // Set the texture samplers to correspond to different lookup table texture units
     SetShaderSamplerBinding(shader, "texture_buffer_lut_lf", TextureUnits::TextureBufferLUT_LF);
@@ -172,7 +174,7 @@ public:
             OGLShader shader;
             shader.Create(source, type);
             OGLProgram& program = std::get<OGLProgram>(shader_or_program);
-            program.Create(true, {shader.handle});
+            program.Create(true, std::array{shader.handle});
             SetShaderUniformBlockBindings(program.handle);
 
             if (type == GL_FRAGMENT_SHADER) {
@@ -415,8 +417,9 @@ void ShaderProgramManager::UseTrivialGeometryShader() {
     impl->current.gs_hash = 0;
 }
 
-void ShaderProgramManager::UseFragmentShader(const Pica::Regs& regs) {
-    PicaFSConfig config = PicaFSConfig::BuildFromRegs(regs);
+void ShaderProgramManager::UseFragmentShader(const Pica::Regs& regs, bool use_normal) {
+    PicaFSConfig config =
+        PicaFSConfig::BuildFromRegs(regs, driver.HasBlendMinMaxFactor(), use_normal);
     auto [handle, result] = impl->fragment_shaders.Get(config);
     impl->current.fs = handle;
     impl->current.fs_hash = config.Hash();
@@ -447,7 +450,8 @@ void ShaderProgramManager::ApplyTo(OpenGLState& state) {
         const u64 unique_identifier = impl->current.GetConfigHash();
         OGLProgram& cached_program = impl->program_cache[unique_identifier];
         if (cached_program.handle == 0) {
-            cached_program.Create(false, {impl->current.vs, impl->current.gs, impl->current.fs});
+            cached_program.Create(false,
+                                  std::array{impl->current.vs, impl->current.gs, impl->current.fs});
             auto& disk_cache = impl->disk_cache;
             disk_cache.SaveDumpToFile(unique_identifier, cached_program.handle,
                                       VideoCore::g_hw_shader_accurate_mul);
@@ -490,7 +494,7 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
     std::vector<std::size_t> load_raws_index;
     // Loads both decompiled and precompiled shaders from the cache. If either one is missing for
     const auto LoadPrecompiledShader = [&](std::size_t begin, std::size_t end,
-                                           const std::vector<ShaderDiskCacheRaw>& raw_cache,
+                                           std::span<const ShaderDiskCacheRaw> raw_cache,
                                            const ShaderDecompiledMap& decompiled_map,
                                            const ShaderDumpsMap& dump_map) {
         for (std::size_t i = begin; i < end; ++i) {
@@ -540,7 +544,8 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
                     impl->programmable_vertex_shaders.Inject(conf, decomp->second.result.code,
                                                              std::move(shader));
                 } else if (raw.GetProgramType() == ProgramType::FS) {
-                    PicaFSConfig conf = PicaFSConfig::BuildFromRegs(raw.GetRawShaderConfig());
+                    PicaFSConfig conf = PicaFSConfig::BuildFromRegs(raw.GetRawShaderConfig(),
+                                                                    driver.HasBlendMinMaxFactor());
                     std::scoped_lock lock(mutex);
                     impl->fragment_shaders.Inject(conf, std::move(shader));
                 } else {
@@ -652,7 +657,8 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
                 std::scoped_lock lock(mutex);
                 impl->programmable_vertex_shaders.Inject(conf, result->code, std::move(stage));
             } else if (raw.GetProgramType() == ProgramType::FS) {
-                PicaFSConfig conf = PicaFSConfig::BuildFromRegs(raw.GetRawShaderConfig());
+                PicaFSConfig conf = PicaFSConfig::BuildFromRegs(raw.GetRawShaderConfig(),
+                                                                driver.HasBlendMinMaxFactor());
                 result = GenerateFragmentShader(conf, impl->separable);
                 OGLShaderStage stage{impl->separable};
                 stage.Create(result->code.c_str(), GL_FRAGMENT_SHADER);

@@ -67,7 +67,9 @@ layout ({}std140) uniform shader_data {{
     vec4 const_color[NUM_TEV_STAGES];
     vec4 tev_combiner_buffer_color;
     vec3 tex_lod_bias;
+    vec4 tex_border_color[3];
     vec4 clip_coef;
+    vec4 blend_color;
 }};
 )";
 

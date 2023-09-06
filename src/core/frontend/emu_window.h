@@ -281,11 +281,23 @@ private:
      * For the request to be honored, EmuWindow implementations will usually reimplement this
      * function.
      */
-    virtual void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) {
+    virtual void OnMinimalClientAreaChangeRequest(
+        [[maybe_unused]] std::pair<u32, u32> minimal_size) {
         // By default, ignore this request and do nothing.
     }
 
     void CreateTouchState();
+
+    /**
+     * Check if the given x/y coordinates are within the touchpad specified by the framebuffer
+     * layout
+     * @param layout FramebufferLayout object describing the framebuffer size and screen positions
+     * @param framebuffer_x Framebuffer x-coordinate to check
+     * @param framebuffer_y Framebuffer y-coordinate to check
+     * @return True if the coordinates are within the touchpad, otherwise false
+     */
+    bool IsWithinTouchscreen(const Layout::FramebufferLayout& layout, unsigned framebuffer_x,
+                             unsigned framebuffer_y);
 
     Layout::FramebufferLayout framebuffer_layout; ///< Current framebuffer layout
 

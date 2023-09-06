@@ -16,9 +16,11 @@ namespace AudioCore {
 DspInterface::DspInterface() = default;
 DspInterface::~DspInterface() = default;
 
-void DspInterface::SetSink(std::string_view sink_id, std::string_view audio_device) {
-    sink = CreateSinkFromID(Settings::values.sink_id.GetValue(),
-                            Settings::values.audio_device_id.GetValue());
+void DspInterface::SetSink(AudioCore::SinkType sink_type, std::string_view audio_device) {
+    // Dispose of the current sink first to avoid contention.
+    sink.reset();
+
+    sink = CreateSinkFromID(sink_type, audio_device);
     sink->SetCallback(
         [this](s16* buffer, std::size_t num_frames) { OutputCallback(buffer, num_frames); });
     time_stretcher.SetOutputSampleRate(sink->GetNativeSampleRate());
@@ -45,8 +47,9 @@ void DspInterface::OutputFrame(StereoFrame16 frame) {
 
     fifo.Push(frame.data(), frame.size());
 
-    if (Core::System::GetInstance().VideoDumper().IsDumping()) {
-        Core::System::GetInstance().VideoDumper().AddAudioFrame(std::move(frame));
+    auto video_dumper = Core::System::GetInstance().GetVideoDumper();
+    if (video_dumper && video_dumper->IsDumping()) {
+        video_dumper->AddAudioFrame(std::move(frame));
     }
 }
 
@@ -56,8 +59,9 @@ void DspInterface::OutputSample(std::array<s16, 2> sample) {
 
     fifo.Push(&sample, 1);
 
-    if (Core::System::GetInstance().VideoDumper().IsDumping()) {
-        Core::System::GetInstance().VideoDumper().AddAudioSample(std::move(sample));
+    auto video_dumper = Core::System::GetInstance().GetVideoDumper();
+    if (video_dumper && video_dumper->IsDumping()) {
+        video_dumper->AddAudioSample(std::move(sample));
     }
 }
 

@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <climits>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
@@ -37,7 +36,6 @@
 #include "core/gdbstub/gdbstub.h"
 #include "core/gdbstub/hio.h"
 #include "core/hle/kernel/process.h"
-#include "core/loader/loader.h"
 #include "core/memory.h"
 
 namespace GDBStub {
@@ -492,7 +490,7 @@ void SendReply(const char* reply) {
         return;
     }
 
-    memset(command_buffer, 0, sizeof(command_buffer));
+    std::memset(command_buffer, 0, sizeof(command_buffer));
 
     command_length = static_cast<u32>(strlen(reply));
     if (command_length + 4 > sizeof(command_buffer)) {
@@ -500,7 +498,7 @@ void SendReply(const char* reply) {
         return;
     }
 
-    memcpy(command_buffer + 1, reply, command_length);
+    std::memcpy(command_buffer + 1, reply, command_length);
 
     u8 checksum = CalculateChecksum(command_buffer, command_length + 1);
     command_buffer[0] = GDB_STUB_START;
@@ -640,7 +638,7 @@ static void SendSignal(Kernel::Thread* thread, u32 signal, bool full = true) {
 /// Read command from gdb client.
 static void ReadCommand() {
     command_length = 0;
-    memset(command_buffer, 0, sizeof(command_buffer));
+    std::memset(command_buffer, 0, sizeof(command_buffer));
 
     u8 c = ReadByte();
     if (c == GDB_STUB_ACK) {
@@ -712,7 +710,7 @@ static bool IsDataAvailable() {
 /// Send requested register to gdb client.
 static void ReadRegister() {
     static u8 reply[64];
-    memset(reply, 0, sizeof(reply));
+    std::memset(reply, 0, sizeof(reply));
 
     u32 id = HexCharToValue(command_buffer[1]);
     if (command_buffer[2] != '\0') {
@@ -738,7 +736,7 @@ static void ReadRegister() {
 /// Send all registers to the gdb client.
 static void ReadRegisters() {
     static u8 buffer[GDB_BUFFER_SIZE - 4];
-    memset(buffer, 0, sizeof(buffer));
+    std::memset(buffer, 0, sizeof(buffer));
 
     u8* bufptr = buffer;
 
@@ -1036,7 +1034,7 @@ static void RemoveBreakpoint() {
     SendReply("OK");
 }
 
-void HandlePacket() {
+void HandlePacket(Core::System& system) {
     if (!IsConnected()) {
         if (defer_start) {
             ToggleServer(true);
@@ -1077,7 +1075,7 @@ void HandlePacket() {
         Continue();
         return;
     case 'F':
-        HandleHioReply(command_buffer, command_length);
+        HandleHioReply(system, command_buffer, command_length);
         break;
     case 'g':
         ReadRegisters();

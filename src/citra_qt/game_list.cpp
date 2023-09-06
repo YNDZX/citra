@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <QActionGroup>
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
@@ -32,6 +33,7 @@
 #include "common/settings.h"
 #include "core/file_sys/archive_extsavedata.h"
 #include "core/file_sys/archive_source_sd_savedata.h"
+#include "core/hle/service/am/am.h"
 #include "core/hle/service/fs/archive.h"
 #include "qcursor.h"
 
@@ -238,7 +240,8 @@ void GameList::OnTextChanged(const QString& new_text) {
                     file_path.mid(file_path.lastIndexOf(QLatin1Char{'/'}) + 1) + QLatin1Char{' '} +
                     file_title;
                 if (ContainsAllWords(file_name, edit_filter_text) ||
-                    (file_program_id.count() == 16 && edit_filter_text.contains(file_program_id))) {
+                    (file_program_id.length() == 16 &&
+                     edit_filter_text.contains(file_program_id))) {
                     tree_view->setRowHidden(j, folder_index, false);
                     ++result_count;
                 } else {
@@ -305,6 +308,9 @@ GameList::GameList(GMainWindow* parent) : QWidget{parent} {
     tree_view->setEditTriggers(QHeaderView::NoEditTriggers);
     tree_view->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_view->setStyleSheet(QStringLiteral("QTreeView{ border: none; }"));
+    tree_view->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    UpdateColumnVisibility();
 
     item_model->insertColumns(0, COLUMN_COUNT);
     RetranslateUI();
@@ -315,6 +321,8 @@ GameList::GameList(GMainWindow* parent) : QWidget{parent} {
     connect(tree_view, &QTreeView::customContextMenuRequested, this, &GameList::PopupContextMenu);
     connect(tree_view, &QTreeView::expanded, this, &GameList::OnItemExpanded);
     connect(tree_view, &QTreeView::collapsed, this, &GameList::OnItemExpanded);
+    connect(tree_view->header(), &QHeaderView::customContextMenuRequested, this,
+            &GameList::PopupHeaderContextMenu);
 
     // We must register all custom types with the Qt Automoc system so that we are able to use
     // it with signals/slots. In this case, QList falls under the umbrells of custom types.
@@ -418,10 +426,10 @@ void GameList::DonePopulating(const QStringList& watch_list) {
     // Workaround: Add the watch paths in chunks to allow the gui to refresh
     // This prevents the UI from stalling when a large number of watch paths are added
     // Also artificially caps the watcher to a certain number of directories
-    constexpr int LIMIT_WATCH_DIRECTORIES = 5000;
+    constexpr qsizetype LIMIT_WATCH_DIRECTORIES = 5000;
     constexpr int SLICE_SIZE = 25;
-    int len = std::min(watch_list.length(), LIMIT_WATCH_DIRECTORIES);
-    for (int i = 0; i < len; i += SLICE_SIZE) {
+    const qsizetype len = std::min(watch_list.length(), LIMIT_WATCH_DIRECTORIES);
+    for (qsizetype i = 0; i < len; i += SLICE_SIZE) {
         watcher->addPaths(watch_list.mid(i, i + SLICE_SIZE));
         QCoreApplication::processEvents();
     }
@@ -467,6 +475,41 @@ void GameList::PopupContextMenu(const QPoint& menu_location) {
     }
 
     context_menu.exec(tree_view->viewport()->mapToGlobal(menu_location));
+}
+
+void GameList::PopupHeaderContextMenu(const QPoint& menu_location) {
+    const QModelIndex item = tree_view->indexAt(menu_location);
+    if (!item.isValid()) {
+        return;
+    }
+
+    QMenu context_menu;
+    static const QMap<QString, Settings::Setting<bool>*> columns{
+        {tr("Compatibility"), &UISettings::values.show_compat_column},
+        {tr("Region"), &UISettings::values.show_region_column},
+        {tr("File type"), &UISettings::values.show_type_column},
+        {tr("Size"), &UISettings::values.show_size_column}};
+
+    QActionGroup* column_group = new QActionGroup(this);
+    column_group->setExclusive(false);
+    for (const auto& key : columns.keys()) {
+        QAction* action = column_group->addAction(context_menu.addAction(key));
+        action->setCheckable(true);
+        action->setChecked(columns[key]->GetValue());
+        connect(action, &QAction::toggled, [this, key](bool value) {
+            *columns[key] = !columns[key]->GetValue();
+            UpdateColumnVisibility();
+        });
+    }
+
+    context_menu.exec(tree_view->viewport()->mapToGlobal(menu_location));
+}
+
+void GameList::UpdateColumnVisibility() {
+    tree_view->setColumnHidden(COLUMN_COMPATIBILITY, !UISettings::values.show_compat_column);
+    tree_view->setColumnHidden(COLUMN_REGION, !UISettings::values.show_region_column);
+    tree_view->setColumnHidden(COLUMN_FILE_TYPE, !UISettings::values.show_type_column);
+    tree_view->setColumnHidden(COLUMN_SIZE, !UISettings::values.show_size_column);
 }
 
 void ForEachOpenGLCacheFile(u64 program_id, auto func) {
@@ -623,8 +666,10 @@ void GameList::AddCustomDirPopup(QMenu& context_menu, QModelIndex selected) {
 void GameList::AddPermDirPopup(QMenu& context_menu, QModelIndex selected) {
     const int game_dir_index = selected.data(GameListDir::GameDirRole).toInt();
 
-    QAction* move_up = context_menu.addAction(tr("\u25b2 Move Up"));
-    QAction* move_down = context_menu.addAction(tr("\u25bc Move Down "));
+    QAction* move_up =
+        context_menu.addAction(tr("Move Up").prepend(QString::fromWCharArray(L"\u25b2 ")));
+    QAction* move_down =
+        context_menu.addAction(tr("Move Down").prepend(QString::fromWCharArray(L"\u25bc ")));
     QAction* open_directory_location = context_menu.addAction(tr("Open Directory Location"));
 
     const int row = selected.row();
@@ -746,6 +791,10 @@ QStandardItemModel* GameList::GetModel() const {
 
 void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
     tree_view->setEnabled(false);
+
+    // Update the columns in case UISettings has changed
+    UpdateColumnVisibility();
+
     // Delete any rows that might already exist if we're repopulating
     item_model->removeRows(0, item_model->rowCount());
     search_field->clear();

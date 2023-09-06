@@ -223,14 +223,12 @@ static const std::array<const char*, 187> country_names = {
     QT_TRANSLATE_NOOP("ConfigureSystem", "Bermuda"), // 180-186
 };
 
-ConfigureSystem::ConfigureSystem(QWidget* parent)
-    : QWidget(parent), ui(std::make_unique<Ui::ConfigureSystem>()) {
+ConfigureSystem::ConfigureSystem(Core::System& system_, QWidget* parent)
+    : QWidget(parent), ui(std::make_unique<Ui::ConfigureSystem>()), system{system_} {
     ui->setupUi(this);
-    connect(ui->combo_birthmonth,
-            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+    connect(ui->combo_birthmonth, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &ConfigureSystem::UpdateBirthdayComboBox);
-    connect(ui->combo_init_clock,
-            static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this,
+    connect(ui->combo_init_clock, qOverload<int>(&QComboBox::currentIndexChanged), this,
             &ConfigureSystem::UpdateInitTime);
     connect(ui->button_regenerate_console_id, &QPushButton::clicked, this,
             &ConfigureSystem::RefreshConsoleID);
@@ -247,9 +245,10 @@ ConfigureSystem::ConfigureSystem(QWidget* parent)
     ui->combo_download_set->setCurrentIndex(0);    // set to Minimal
     ui->combo_download_region->setCurrentIndex(0); // set to the base region
 
-    bool keys_available = true;
     HW::AES::InitKeys(true);
-    for (u8 i = 0; i < HW::AES::MaxCommonKeySlot; i++) {
+    bool keys_available = HW::AES::IsKeyXAvailable(HW::AES::KeySlotID::NCCHSecure1) &&
+                          HW::AES::IsKeyXAvailable(HW::AES::KeySlotID::NCCHSecure2);
+    for (u8 i = 0; i < HW::AES::MaxCommonKeySlot && keys_available; i++) {
         HW::AES::SelectCommonKeyIndex(i);
         if (!HW::AES::IsNormalKeyAvailable(HW::AES::KeySlotID::TicketCommonKey)) {
             keys_available = false;
@@ -279,11 +278,11 @@ ConfigureSystem::ConfigureSystem(QWidget* parent)
 ConfigureSystem::~ConfigureSystem() = default;
 
 void ConfigureSystem::SetConfiguration() {
-    enabled = !Core::System::GetInstance().IsPoweredOn();
+    enabled = !system.IsPoweredOn();
 
     ui->combo_init_clock->setCurrentIndex(static_cast<u8>(Settings::values.init_clock.GetValue()));
     QDateTime date_time;
-    date_time.setTime_t(Settings::values.init_time.GetValue());
+    date_time.setSecsSinceEpoch(Settings::values.init_time.GetValue());
     ui->edit_init_time->setDateTime(date_time);
 
     long long init_time_offset = Settings::values.init_time_offset.GetValue();
@@ -295,7 +294,7 @@ void ConfigureSystem::SetConfiguration() {
     ui->edit_init_time_offset_time->setTime(time);
 
     if (!enabled) {
-        cfg = Service::CFG::GetModule(Core::System::GetInstance());
+        cfg = Service::CFG::GetModule(system);
         ASSERT_MSG(cfg, "CFG Module missing!");
         ReadSystemSettings();
         ui->group_system_settings->setEnabled(false);
@@ -336,6 +335,10 @@ void ConfigureSystem::ReadSystemSettings() {
     // set the country code
     country_code = cfg->GetCountryCode();
     ui->combo_country->setCurrentIndex(ui->combo_country->findData(country_code));
+
+    // set whether system setup is needed
+    system_setup = cfg->IsSystemSetupNeeded();
+    ui->toggle_system_setup->setChecked(system_setup);
 
     // set the console id
     u64 console_id = cfg->GetConsoleUniqueId();
@@ -390,6 +393,13 @@ void ConfigureSystem::ApplyConfiguration() {
             modified = true;
         }
 
+        // apply whether system setup is needed
+        bool new_system_setup = static_cast<u8>(ui->toggle_system_setup->isChecked());
+        if (system_setup != new_system_setup) {
+            cfg->SetSystemSetupNeeded(new_system_setup);
+            modified = true;
+        }
+
         // apply play coin
         u16 new_play_coin = static_cast<u16>(ui->spinBox_play_coins->value());
         if (play_coin != new_play_coin) {
@@ -406,7 +416,7 @@ void ConfigureSystem::ApplyConfiguration() {
 
         Settings::values.init_clock =
             static_cast<Settings::InitClock>(ui->combo_init_clock->currentIndex());
-        Settings::values.init_time = ui->edit_init_time->dateTime().toTime_t();
+        Settings::values.init_time = ui->edit_init_time->dateTime().toSecsSinceEpoch();
 
         s64 time_offset_time = ui->edit_init_time_offset_time->time().msecsSinceStartOfDay() / 1000;
         s64 time_offset_days = ui->edit_init_time_offset_days->value() * 86400;
@@ -523,6 +533,7 @@ void ConfigureSystem::SetupPerGameUI() {
     ui->label_init_time_offset->setVisible(false);
     ui->edit_init_time_offset_days->setVisible(false);
     ui->edit_init_time_offset_time->setVisible(false);
+    ui->toggle_system_setup->setVisible(false);
     ui->button_regenerate_console_id->setVisible(false);
     // Apps can change the state of the plugin loader, so plugins load
     // to a chainloaded app with specific parameters. Don't allow
@@ -540,7 +551,6 @@ void ConfigureSystem::SetupPerGameUI() {
 }
 
 void ConfigureSystem::DownloadFromNUS() {
-#ifdef ENABLE_WEB_SERVICE
     ui->button_start_download->setEnabled(false);
 
     const auto mode =
@@ -579,5 +589,4 @@ void ConfigureSystem::DownloadFromNUS() {
     }
 
     ui->button_start_download->setEnabled(true);
-#endif
 }

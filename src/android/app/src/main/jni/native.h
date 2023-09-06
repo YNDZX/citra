@@ -138,20 +138,13 @@ JNIEXPORT jstring JNICALL Java_org_citra_citra_1emu_NativeLibrary_GetUserSetting
 JNIEXPORT jdoubleArray JNICALL Java_org_citra_citra_1emu_NativeLibrary_GetPerfStats(JNIEnv* env,
                                                                                     jclass clazz);
 
-JNIEXPORT jobjectArray JNICALL
-Java_org_citra_citra_1emu_NativeLibrary_GetTextureFilterNames(JNIEnv* env, jclass clazz);
-
 JNIEXPORT void JNICALL Java_org_citra_citra_1emu_NativeLibrary_ReloadCameraDevices(JNIEnv* env,
                                                                                    jclass clazz);
 
 JNIEXPORT jboolean Java_org_citra_citra_1emu_NativeLibrary_LoadAmiibo(JNIEnv* env, jclass clazz,
-                                                                      jbyteArray bytes);
+                                                                      jstring j_file);
 
 JNIEXPORT void Java_org_citra_citra_1emu_NativeLibrary_RemoveAmiibo(JNIEnv* env, jclass clazz);
-
-JNIEXPORT void JNICALL Java_org_citra_citra_1emu_NativeLibrary_InstallCIAS(JNIEnv* env,
-                                                                           jclass clazz,
-                                                                           jobjectArray path);
 
 JNIEXPORT jobjectArray JNICALL
 Java_org_citra_citra_1emu_NativeLibrary_GetSavestateInfo(JNIEnv* env, jclass clazz);
@@ -164,6 +157,10 @@ JNIEXPORT void JNICALL Java_org_citra_citra_1emu_NativeLibrary_LoadState(JNIEnv*
 
 JNIEXPORT void JNICALL Java_org_citra_citra_1emu_NativeLibrary_LogDeviceInfo(JNIEnv* env,
                                                                              jclass clazz);
+
+JNIEXPORT jobject JNICALL Java_org_citra_citra_1emu_NativeLibrary_InstallCIA(JNIEnv* env,
+                                                                             jclass clazz,
+                                                                             jstring file);
 
 #ifdef __cplusplus
 }

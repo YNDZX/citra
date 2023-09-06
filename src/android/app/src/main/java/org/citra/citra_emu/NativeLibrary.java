@@ -128,29 +128,7 @@ public final class NativeLibrary {
 
     public static native void InitGameIni(String gameID);
 
-    /**
-     * Gets the embedded icon within the given ROM.
-     *
-     * @param filename the file path to the ROM.
-     * @return an integer array containing the color data for the icon.
-     */
-    public static native int[] GetIcon(String filename);
-
-    /**
-     * Gets the embedded title of the given ISO/ROM.
-     *
-     * @param filename The file path to the ISO/ROM.
-     * @return the embedded title of the ISO/ROM.
-     */
-    public static native String GetTitle(String filename);
-
-    public static native String GetDescription(String filename);
-
-    public static native String GetGameId(String filename);
-
-    public static native String GetRegions(String filename);
-
-    public static native String GetCompany(String filename);
+    public static native long GetTitleId(String filename);
 
     public static native String GetGitRevision();
 
@@ -209,6 +187,11 @@ public final class NativeLibrary {
      * Returns true if emulation is running (or is paused).
      */
     public static native boolean IsRunning();
+
+    /**
+     * Returns the title ID of the currently running title, or 0 on failure.
+     */
+    public static native long GetRunningTitleId();
 
     /**
      * Returns the performance stats for the current game
@@ -602,11 +585,9 @@ public final class NativeLibrary {
     /// Notifies that the activity is now in foreground and camera devices can now be reloaded
     public static native void ReloadCameraDevices();
 
-    public static native boolean LoadAmiibo(byte[] bytes);
+    public static native boolean LoadAmiibo(String path);
 
     public static native void RemoveAmiibo();
-
-    public static native void InstallCIAS(String[] path);
 
     public static final int SAVESTATE_SLOT_COUNT = 10;
 

@@ -5,9 +5,20 @@
 #pragma once
 
 #include "common/math_util.h"
-#include "common/settings.h"
+
+namespace Settings {
+enum class LayoutOption : u32;
+}
 
 namespace Layout {
+
+/// Orientation of the 3DS displays
+enum class DisplayOrientation {
+    Landscape,        // Default orientation of the 3DS
+    Portrait,         // 3DS rotated 90 degrees counter-clockwise
+    LandscapeFlipped, // 3DS rotated 180 degrees counter-clockwise
+    PortraitFlipped,  // 3DS rotated 270 degrees counter-clockwise
+};
 
 /// Describes the horizontal coordinates for the right eye screen when using Cardboard VR
 struct CardboardSettings {
@@ -25,6 +36,9 @@ struct FramebufferLayout {
     Common::Rectangle<u32> top_screen;
     Common::Rectangle<u32> bottom_screen;
     bool is_rotated = true;
+
+    bool additional_screen_enabled;
+    Common::Rectangle<u32> additional_screen;
 
     CardboardSettings cardboard;
 
@@ -88,6 +102,15 @@ FramebufferLayout SingleFrameLayout(u32 width, u32 height, bool is_swapped, bool
  */
 FramebufferLayout LargeFrameLayout(u32 width, u32 height, bool is_swapped, bool upright,
                                    float scale_factor);
+/**
+ * Factory method for constructing a frame with 2.5 times bigger top screen on the right,
+ * and 1x top and bottom screen on the left
+ * @param width Window framebuffer width in pixels
+ * @param height Window framebuffer height in pixels
+ * @param is_swapped if true, the bottom screen will be the large display
+ * @return Newly created FramebufferLayout object with default screen regions initialized
+ */
+FramebufferLayout HybridScreenLayout(u32 width, u32 height, bool swapped, bool upright);
 
 /**
  * Factory method for constructing a Frame with the Top screen and bottom

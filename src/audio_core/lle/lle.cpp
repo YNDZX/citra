@@ -26,7 +26,7 @@ enum class SegmentType : u8 {
 
 class Dsp1 {
 public:
-    explicit Dsp1(const std::vector<u8>& raw);
+    explicit Dsp1(std::span<const u8> raw);
 
     struct Header {
         std::array<u8, 0x100> signature;
@@ -65,10 +65,11 @@ public:
     bool recv_data_on_start;
 };
 
-Dsp1::Dsp1(const std::vector<u8>& raw) {
+Dsp1::Dsp1(std::span<const u8> raw) {
     Header header;
     std::memcpy(&header, raw.data(), sizeof(header));
     recv_data_on_start = header.recv_data_on_start != 0;
+    segments.reserve(header.num_segments);
     for (u32 i = 0; i < header.num_segments; ++i) {
         Segment segment;
         segment.data =
@@ -121,8 +122,8 @@ static u8 PipeIndexToSlotIndex(u8 pipe_index, PipeDirection direction) {
 }
 
 struct DspLle::Impl final {
-    Impl(bool multithread) : multithread(multithread) {
-        teakra_slice_event = Core::System::GetInstance().CoreTiming().RegisterEvent(
+    Impl(Core::Timing& timing, bool multithread) : core_timing(timing), multithread(multithread) {
+        teakra_slice_event = core_timing.RegisterEvent(
             "DSP slice", [this](u64, int late) { TeakraSliceEvent(static_cast<u64>(late)); });
     }
 
@@ -136,6 +137,7 @@ struct DspLle::Impl final {
     bool semaphore_signaled = false;
     bool data_signaled = false;
 
+    Core::Timing& core_timing;
     Core::TimingEventType* teakra_slice_event;
     std::atomic<bool> loaded = false;
 
@@ -184,7 +186,7 @@ struct DspLle::Impl final {
             next = 0;
         else
             next -= late;
-        Core::System::GetInstance().CoreTiming().ScheduleEvent(next, teakra_slice_event, 0);
+        core_timing.ScheduleEvent(next, teakra_slice_event, 0);
     }
 
     u8* GetDspDataPointer(u32 baddr) {
@@ -218,7 +220,7 @@ struct DspLle::Impl final {
         }
     }
 
-    void WritePipe(u8 pipe_index, const std::vector<u8>& data) {
+    void WritePipe(u8 pipe_index, std::span<const u8> data) {
         PipeStatus pipe_status = GetPipeStatus(pipe_index, PipeDirection::CPUtoDSP);
         bool need_update = false;
         const u8* buffer_ptr = data.data();
@@ -302,7 +304,7 @@ struct DspLle::Impl final {
         return size & PipeStatus::PtrMask;
     }
 
-    void LoadComponent(const std::vector<u8>& buffer) {
+    void LoadComponent(std::span<const u8> buffer) {
         if (loaded) {
             LOG_ERROR(Audio_DSP, "Component already loaded!");
             return;
@@ -325,7 +327,7 @@ struct DspLle::Impl final {
 
         // TODO: load special segment
 
-        Core::System::GetInstance().CoreTiming().ScheduleEvent(TeakraSlice, teakra_slice_event, 0);
+        core_timing.ScheduleEvent(TeakraSlice, teakra_slice_event, 0);
 
         if (multithread) {
             teakra_thread = std::thread(&Impl::TeakraThread, this);
@@ -370,7 +372,7 @@ struct DspLle::Impl final {
 
         teakra.RecvData(2); // discard the value
 
-        Core::System::GetInstance().CoreTiming().UnscheduleEvent(teakra_slice_event, 0);
+        core_timing.UnscheduleEvent(teakra_slice_event, 0);
         StopTeakraThread();
     }
 };
@@ -390,7 +392,7 @@ void DspLle::SetSemaphore(u16 semaphore_value) {
     impl->teakra.SetSemaphore(semaphore_value);
 }
 
-std::vector<u8> DspLle::PipeRead(DspPipe pipe_number, u32 length) {
+std::vector<u8> DspLle::PipeRead(DspPipe pipe_number, std::size_t length) {
     return impl->ReadPipe(static_cast<u8>(pipe_number), static_cast<u16>(length));
 }
 
@@ -398,7 +400,7 @@ std::size_t DspLle::GetPipeReadableSize(DspPipe pipe_number) const {
     return impl->GetPipeReadableSize(static_cast<u8>(pipe_number));
 }
 
-void DspLle::PipeWrite(DspPipe pipe_number, const std::vector<u8>& buffer) {
+void DspLle::PipeWrite(DspPipe pipe_number, std::span<const u8> buffer) {
     impl->WritePipe(static_cast<u8>(pipe_number), buffer);
 }
 
@@ -450,7 +452,8 @@ void DspLle::SetServiceToInterrupt(std::weak_ptr<Service::DSP::DSP_DSP> dsp) {
                 return;
             if (pipe == 0) {
                 // pipe 0 is for debug. 3DS automatically drains this pipe and discards the data
-                impl->ReadPipe(static_cast<u8>(pipe), impl->GetPipeReadableSize(pipe));
+                impl->ReadPipe(static_cast<u8>(pipe),
+                               impl->GetPipeReadableSize(static_cast<u8>(pipe)));
             } else {
                 std::lock_guard lock(HLE::g_hle_lock);
                 if (auto locked = dsp.lock()) {
@@ -465,7 +468,15 @@ void DspLle::SetServiceToInterrupt(std::weak_ptr<Service::DSP::DSP_DSP> dsp) {
     impl->teakra.SetSemaphoreHandler([ProcessPipeEvent]() { ProcessPipeEvent(false); });
 }
 
-void DspLle::LoadComponent(const std::vector<u8>& buffer) {
+void DspLle::SetSemaphoreHandler(std::function<void()> handler) {
+    impl->teakra.SetSemaphoreHandler(handler);
+}
+
+void DspLle::SetRecvDataHandler(u8 index, std::function<void()> handler) {
+    impl->teakra.SetRecvDataHandler(index, handler);
+}
+
+void DspLle::LoadComponent(std::span<const u8> buffer) {
     impl->LoadComponent(buffer);
 }
 
@@ -473,8 +484,8 @@ void DspLle::UnloadComponent() {
     impl->UnloadComponent();
 }
 
-DspLle::DspLle(Memory::MemorySystem& memory, bool multithread)
-    : impl(std::make_unique<Impl>(multithread)) {
+DspLle::DspLle(Memory::MemorySystem& memory, Core::Timing& timing, bool multithread)
+    : impl(std::make_unique<Impl>(timing, multithread)) {
     Teakra::AHBMCallback ahbm;
     ahbm.read8 = [&memory](u32 address) -> u8 {
         return *memory.GetFCRAMPointer(address - Memory::FCRAM_PADDR);

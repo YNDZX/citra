@@ -3,8 +3,6 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <iostream>
-#include <regex>
 #include <thread>
 
 #include <android/api-level.h>
@@ -24,10 +22,11 @@
 #include "core/core.h"
 #include "core/frontend/applets/default_applets.h"
 #include "core/frontend/camera/factory.h"
-#include "core/frontend/mic.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/nfc/nfc.h"
+#include "core/loader/loader.h"
 #include "core/savestate.h"
+#include "core/telemetry_session.h"
 #include "jni/android_common/android_common.h"
 #include "jni/applets/mii_selector.h"
 #include "jni/applets/swkbd.h"
@@ -35,16 +34,12 @@
 #include "jni/camera/still_image_camera.h"
 #include "jni/config.h"
 #include "jni/emu_window/emu_window.h"
-#include "jni/game_info.h"
 #include "jni/game_settings.h"
 #include "jni/id_cache.h"
 #include "jni/input_manager.h"
-#include "jni/lodepng_image_interface.h"
-#include "jni/mic.h"
 #include "jni/native.h"
 #include "jni/ndk_motion.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_opengl/texture_filters/texture_filterer.h"
 #include "video_core/video_core.h"
 
 namespace {
@@ -61,35 +56,6 @@ std::mutex running_mutex;
 std::condition_variable running_cv;
 
 } // Anonymous namespace
-
-static bool DisplayAlertMessage(const char* caption, const char* text, bool yes_no) {
-    JNIEnv* env = IDCache::GetEnvForThread();
-
-    // Execute the Java method.
-    jboolean result = env->CallStaticBooleanMethod(
-        IDCache::GetNativeLibraryClass(), IDCache::GetDisplayAlertMsg(), ToJString(env, caption),
-        ToJString(env, text), yes_no ? JNI_TRUE : JNI_FALSE);
-
-    return result != JNI_FALSE;
-}
-
-static std::string DisplayAlertPrompt(const char* caption, const char* text, int buttonConfig) {
-    JNIEnv* env = IDCache::GetEnvForThread();
-
-    jstring value = reinterpret_cast<jstring>(env->CallStaticObjectMethod(
-        IDCache::GetNativeLibraryClass(), IDCache::GetDisplayAlertPrompt(), ToJString(env, caption),
-        ToJString(env, text), buttonConfig));
-
-    return GetJString(env, value);
-}
-
-static int AlertPromptButton() {
-    JNIEnv* env = IDCache::GetEnvForThread();
-
-    // Execute the Java method.
-    return static_cast<int>(env->CallStaticIntMethod(IDCache::GetNativeLibraryClass(),
-                                                     IDCache::GetAlertPromptButton()));
-}
 
 static jobject ToJavaCoreError(Core::System::ResultStatus result) {
     static const std::map<Core::System::ResultStatus, const char*> CoreErrorNameMap{
@@ -136,6 +102,11 @@ static void TryShutdown() {
     MicroProfileShutdown();
 }
 
+static bool CheckMicPermission() {
+    return IDCache::GetEnvForThread()->CallStaticBooleanMethod(IDCache::GetNativeLibraryClass(),
+                                                               IDCache::GetRequestMicPermission());
+}
+
 static Core::System::ResultStatus RunCitra(const std::string& filepath) {
     // Citra core only supports a single running instance
     std::lock_guard<std::mutex> lock(running_mutex);
@@ -171,7 +142,7 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
         app_loader->ReadProgramId(program_id);
         GameSettings::LoadOverrides(program_id);
     }
-    Settings::Apply();
+    system.ApplySettings();
     Settings::LogSettings();
 
     Camera::RegisterFactory("image", std::make_unique<Camera::StillImage::Factory>());
@@ -181,15 +152,12 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
     Camera::RegisterFactory("ndk", std::move(ndk_factory));
 
     // Register frontend applets
-    Frontend::RegisterDefaultApplets();
+    Frontend::RegisterDefaultApplets(system);
     system.RegisterMiiSelector(std::make_shared<MiiSelector::AndroidMiiSelector>());
     system.RegisterSoftwareKeyboard(std::make_shared<SoftwareKeyboard::AndroidKeyboard>());
 
-    // Register generic image interface
-    Core::System::GetInstance().RegisterImageInterface(std::make_shared<LodePNGImageInterface>());
-
-    // Register real Mic factory
-    Frontend::Mic::RegisterRealMicFactory(std::make_unique<Mic::AndroidFactory>());
+    // Register microphone permission check
+    system.RegisterMicPermissionCheck(&CheckMicPermission);
 
     InputManager::Init();
 
@@ -199,7 +167,7 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
         return load_result;
     }
 
-    auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
+    auto& telemetry_session = system.TelemetrySession();
     telemetry_session.AddField(Common::Telemetry::FieldType::App, "Frontend", "Android");
 
     stop_run = false;
@@ -220,8 +188,7 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
     audio_stretching_event =
         system.CoreTiming().RegisterEvent("AudioStretchingEvent", [&](u64, s64 cycles_late) {
             if (Settings::values.enable_audio_stretching) {
-                Core::DSP().EnableStretching(
-                    Core::System::GetInstance().GetAndResetPerfStats().emulation_speed < 0.95);
+                system.DSP().EnableStretching(system.GetAndResetPerfStats().emulation_speed < 0.95);
             }
 
             system.CoreTiming().ScheduleEvent(audio_stretching_ticks - cycles_late,
@@ -252,7 +219,7 @@ static Core::System::ResultStatus RunCitra(const std::string& filepath) {
             SCOPE_EXIT({ Settings::values.volume = volume; });
             Settings::values.volume = 0;
 
-            std::unique_lock<std::mutex> pause_lock(paused_mutex);
+            std::unique_lock pause_lock{paused_mutex};
             running_cv.wait(pause_lock, [] { return !pause_emulation || stop_run; });
             window->PollEvents();
         }
@@ -384,6 +351,13 @@ jboolean Java_org_citra_citra_1emu_NativeLibrary_IsRunning(JNIEnv* env,
     return static_cast<jboolean>(!stop_run);
 }
 
+jlong Java_org_citra_citra_1emu_NativeLibrary_GetRunningTitleId(JNIEnv* env,
+                                                                [[maybe_unused]] jclass clazz) {
+    u64 title_id{};
+    Core::System::GetInstance().GetAppLoader().ReadProgramId(title_id);
+    return static_cast<jlong>(title_id);
+}
+
 jboolean Java_org_citra_citra_1emu_NativeLibrary_onGamePadEvent(JNIEnv* env,
                                                                 [[maybe_unused]] jclass clazz,
                                                                 jstring j_device, jint j_button,
@@ -440,58 +414,16 @@ void Java_org_citra_citra_1emu_NativeLibrary_onTouchMoved(JNIEnv* env,
     window->OnTouchMoved((int)x, (int)y);
 }
 
-jintArray Java_org_citra_citra_1emu_NativeLibrary_GetIcon(JNIEnv* env,
-                                                          [[maybe_unused]] jclass clazz,
-                                                          jstring j_file) {
-    std::string filepath = GetJString(env, j_file);
-
-    std::vector<u16> icon_data = GameInfo::GetIcon(filepath);
-    if (icon_data.size() == 0) {
-        return 0;
-    }
-
-    jintArray icon = env->NewIntArray(static_cast<jsize>(icon_data.size() / 2));
-    env->SetIntArrayRegion(icon, 0, env->GetArrayLength(icon),
-                           reinterpret_cast<jint*>(icon_data.data()));
-
-    return icon;
-}
-
-jstring Java_org_citra_citra_1emu_NativeLibrary_GetTitle(JNIEnv* env, [[maybe_unused]] jclass clazz,
+jlong Java_org_citra_citra_1emu_NativeLibrary_GetTitleId(JNIEnv* env, [[maybe_unused]] jclass clazz,
                                                          jstring j_filename) {
     std::string filepath = GetJString(env, j_filename);
-    auto Title = GameInfo::GetTitle(filepath);
-    return env->NewStringUTF(Common::UTF16ToUTF8(Title).data());
-}
+    const auto loader = Loader::GetLoader(filepath);
 
-jstring Java_org_citra_citra_1emu_NativeLibrary_GetDescription(JNIEnv* env,
-                                                               [[maybe_unused]] jclass clazz,
-                                                               jstring j_filename) {
-    return j_filename;
-}
-
-jstring Java_org_citra_citra_1emu_NativeLibrary_GetGameId(JNIEnv* env,
-                                                          [[maybe_unused]] jclass clazz,
-                                                          jstring j_filename) {
-    return j_filename;
-}
-
-jstring Java_org_citra_citra_1emu_NativeLibrary_GetRegions(JNIEnv* env,
-                                                           [[maybe_unused]] jclass clazz,
-                                                           jstring j_filename) {
-    std::string filepath = GetJString(env, j_filename);
-
-    std::string regions = GameInfo::GetRegions(filepath);
-
-    return env->NewStringUTF(regions.c_str());
-}
-
-jstring Java_org_citra_citra_1emu_NativeLibrary_GetCompany(JNIEnv* env,
-                                                           [[maybe_unused]] jclass clazz,
-                                                           jstring j_filename) {
-    std::string filepath = GetJString(env, j_filename);
-    auto publisher = GameInfo::GetPublisher(filepath);
-    return env->NewStringUTF(Common::UTF16ToUTF8(publisher).data());
+    u64 title_id{};
+    if (loader) {
+        loader->ReadProgramId(title_id);
+    }
+    return static_cast<jlong>(title_id);
 }
 
 jstring Java_org_citra_citra_1emu_NativeLibrary_GetGitRevision(JNIEnv* env,
@@ -506,10 +438,8 @@ void Java_org_citra_citra_1emu_NativeLibrary_CreateConfigFile(JNIEnv* env,
 
 void Java_org_citra_citra_1emu_NativeLibrary_CreateLogFile(JNIEnv* env,
                                                            [[maybe_unused]] jclass clazz) {
-    Log::RemoveBackend(Log::FileBackend::Name());
-    FileUtil::CreateFullPath(FileUtil::GetUserPath(FileUtil::UserPath::LogDir));
-    Log::AddBackend(std::make_unique<Log::FileBackend>(
-        FileUtil::GetUserPath(FileUtil::UserPath::LogDir) + LOG_FILE));
+    Common::Log::Initialize();
+    Common::Log::Start();
     LOG_INFO(Frontend, "Logging backend initialised");
 }
 
@@ -542,7 +472,7 @@ void Java_org_citra_citra_1emu_NativeLibrary_ReloadSettings(JNIEnv* env,
         GameSettings::LoadOverrides(program_id);
     }
 
-    Settings::Apply();
+    system.ApplySettings();
 }
 
 jstring Java_org_citra_citra_1emu_NativeLibrary_GetUserSetting(JNIEnv* env,
@@ -630,17 +560,6 @@ void Java_org_citra_citra_1emu_NativeLibrary_Run__Ljava_lang_String_2(JNIEnv* en
     }
 }
 
-jobjectArray Java_org_citra_citra_1emu_NativeLibrary_GetTextureFilterNames(JNIEnv* env,
-                                                                           jclass clazz) {
-    auto names = OpenGL::TextureFilterer::GetFilterNames();
-    jobjectArray ret = (jobjectArray)env->NewObjectArray(static_cast<jsize>(names.size()),
-                                                         env->FindClass("java/lang/String"),
-                                                         env->NewStringUTF(""));
-    for (jsize i = 0; i < names.size(); ++i)
-        env->SetObjectArrayElement(ret, i, env->NewStringUTF(names[i].data()));
-    return ret;
-}
-
 void Java_org_citra_citra_1emu_NativeLibrary_ReloadCameraDevices(JNIEnv* env, jclass clazz) {
     if (g_ndk_factory) {
         g_ndk_factory->ReloadCameraDevices();
@@ -648,20 +567,16 @@ void Java_org_citra_citra_1emu_NativeLibrary_ReloadCameraDevices(JNIEnv* env, jc
 }
 
 jboolean Java_org_citra_citra_1emu_NativeLibrary_LoadAmiibo(JNIEnv* env, jclass clazz,
-                                                            jbyteArray bytes) {
+                                                            jstring j_file) {
+    std::string filepath = GetJString(env, j_file);
     Core::System& system{Core::System::GetInstance()};
     Service::SM::ServiceManager& sm = system.ServiceManager();
     auto nfc = sm.GetService<Service::NFC::Module::Interface>("nfc:u");
-    if (nfc == nullptr || env->GetArrayLength(bytes) != sizeof(Service::NFC::AmiiboData)) {
+    if (nfc == nullptr) {
         return static_cast<jboolean>(false);
     }
 
-    Service::NFC::AmiiboData amiibo_data{};
-    env->GetByteArrayRegion(bytes, 0, sizeof(Service::NFC::AmiiboData),
-                            reinterpret_cast<jbyte*>(&amiibo_data));
-
-    nfc->LoadAmiibo(amiibo_data);
-    return static_cast<jboolean>(true);
+    return static_cast<jboolean>(nfc->LoadAmiibo(filepath));
 }
 
 void Java_org_citra_citra_1emu_NativeLibrary_RemoveAmiibo(JNIEnv* env, jclass clazz) {
@@ -675,28 +590,16 @@ void Java_org_citra_citra_1emu_NativeLibrary_RemoveAmiibo(JNIEnv* env, jclass cl
     nfc->RemoveAmiibo();
 }
 
-void Java_org_citra_citra_1emu_NativeLibrary_InstallCIAS(JNIEnv* env, [[maybe_unused]] jclass clazz,
-                                                         jobjectArray path) {
-    const jsize count{env->GetArrayLength(path)};
-    std::vector<std::string> paths;
-    for (jsize idx{0}; idx < count; ++idx) {
-        paths.emplace_back(
-            GetJString(env, static_cast<jstring>(env->GetObjectArrayElement(path, idx))));
-    }
-    std::atomic<jsize> idx{count};
-    std::vector<std::thread> threads;
-    std::generate_n(std::back_inserter(threads),
-                    std::min<jsize>(std::thread::hardware_concurrency(), count), [&] {
-                        return std::thread{[&idx, &paths, env] {
-                            jsize work_idx;
-                            while ((work_idx = --idx) >= 0) {
-                                LOG_INFO(Frontend, "Installing CIA {}", work_idx);
-                                Service::AM::InstallCIA(paths[work_idx]);
-                            }
-                        }};
-                    });
-    for (auto& thread : threads)
-        thread.join();
+JNIEXPORT jobject JNICALL Java_org_citra_citra_1emu_utils_CiaInstallWorker_InstallCIA(
+    JNIEnv* env, jobject jobj, jstring jpath) {
+    std::string path = GetJString(env, jpath);
+    Service::AM::InstallStatus res =
+        Service::AM::InstallCIA(path, [env, jobj](size_t total_bytes_read, size_t file_size) {
+            env->CallVoidMethod(jobj, IDCache::GetCiaInstallHelperSetProgress(),
+                                static_cast<jint>(file_size), static_cast<jint>(total_bytes_read));
+        });
+
+    return IDCache::GetJavaCiaInstallStatus(res);
 }
 
 jobjectArray Java_org_citra_citra_1emu_NativeLibrary_GetSavestateInfo(
@@ -718,7 +621,7 @@ jobjectArray Java_org_citra_citra_1emu_NativeLibrary_GetSavestateInfo(
         return nullptr;
     }
 
-    const auto savestates = Core::ListSaveStates(title_id);
+    const auto savestates = Core::ListSaveStates(title_id, system.Movie().GetCurrentMovieID());
     const jobjectArray array =
         env->NewObjectArray(static_cast<jsize>(savestates.size()), savestate_info_class, nullptr);
     for (std::size_t i = 0; i < savestates.size(); ++i) {

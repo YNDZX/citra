@@ -3,6 +3,8 @@
 # Suppress warnings from external libraries
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     add_compile_options(/W0)
+else()
+    add_compile_options(-w)
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/CMakeModules)
@@ -10,45 +12,41 @@ include(DownloadExternals)
 include(ExternalProject)
 
 # Boost
-set(BOOST_ROOT "${CMAKE_SOURCE_DIR}/externals/boost")
-set(Boost_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/externals/boost")
-set(Boost_NO_SYSTEM_PATHS ON)
-add_library(boost INTERFACE)
-target_include_directories(boost SYSTEM INTERFACE ${Boost_INCLUDE_DIR})
+if (NOT USE_SYSTEM_BOOST)
+    message(STATUS "Including vendored Boost library")
+    set(BOOST_ROOT "${CMAKE_SOURCE_DIR}/externals/boost" CACHE STRING "")
+    set(Boost_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/externals/boost" CACHE STRING "")
+    set(Boost_NO_SYSTEM_PATHS ON CACHE BOOL "")
+    add_library(boost INTERFACE)
+    target_include_directories(boost SYSTEM INTERFACE ${Boost_INCLUDE_DIR})
 
-# Boost::serialization
-file(GLOB boost_serialization_SRC "${CMAKE_SOURCE_DIR}/externals/boost/libs/serialization/src/*.cpp")
-add_library(boost_serialization STATIC ${boost_serialization_SRC})
-target_link_libraries(boost_serialization PUBLIC boost)
+    # Boost::serialization
+    file(GLOB boost_serialization_SRC "${CMAKE_SOURCE_DIR}/externals/boost/libs/serialization/src/*.cpp")
+    add_library(boost_serialization STATIC ${boost_serialization_SRC})
+    target_link_libraries(boost_serialization PUBLIC boost)
 
-# Boost::iostreams
-add_library(
-    boost_iostreams
-    STATIC
-    ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/file_descriptor.cpp
-    ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/mapped_file.cpp
-)
-target_link_libraries(boost_iostreams PUBLIC boost)
-
+    # Boost::iostreams
+    add_library(
+        boost_iostreams
+        STATIC
+        ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/file_descriptor.cpp
+        ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/mapped_file.cpp
+    )
+    target_link_libraries(boost_iostreams PUBLIC boost)
 # Add additional boost libs here; remember to ALIAS them in the root CMakeLists!
+endif()
 
 # Catch2
-set(CATCH_INSTALL_DOCS OFF)
-set(CATCH_INSTALL_EXTRAS OFF)
+set(CATCH_INSTALL_DOCS OFF CACHE BOOL "")
+set(CATCH_INSTALL_EXTRAS OFF CACHE BOOL "")
 add_subdirectory(catch2)
 
 # Crypto++
-set(CRYPTOPP_BUILD_DOCUMENTATION OFF)
-set(CRYPTOPP_BUILD_TESTING OFF)
-set(CRYPTOPP_INSTALL OFF)
-set(CRYPTOPP_SOURCES "${CMAKE_SOURCE_DIR}/externals/cryptopp")
+set(CRYPTOPP_BUILD_DOCUMENTATION OFF CACHE BOOL "")
+set(CRYPTOPP_BUILD_TESTING OFF CACHE BOOL "")
+set(CRYPTOPP_INSTALL OFF CACHE BOOL "")
+set(CRYPTOPP_SOURCES "${CMAKE_SOURCE_DIR}/externals/cryptopp" CACHE STRING "")
 add_subdirectory(cryptopp-cmake)
-
-# HACK: Mismatch between compilation of CryptoPP and headers used in Citra can cause runtime issues.
-# Pull out the compile definitions from CryptoPP and apply them to Citra as well to fix this.
-# See: https://github.com/weidai11/cryptopp/issues/1191
-get_source_file_property(CRYPTOPP_COMPILE_DEFINITIONS ${CRYPTOPP_SOURCES}/cryptlib.cpp TARGET_DIRECTORY cryptopp COMPILE_DEFINITIONS)
-set(CRYPTOPP_COMPILE_DEFINITIONS ${CRYPTOPP_COMPILE_DEFINITIONS} PARENT_SCOPE)
 
 # HACK: The logic to set up the base include directory for CryptoPP does not work with Android SDK CMake 3.22.1.
 # Until there is a fixed version available, this code will detect and add in the proper include if it does not exist.
@@ -64,6 +62,10 @@ if(ANDROID)
     endforeach()
 endif()
 
+# dds-ktx
+add_library(dds-ktx INTERFACE)
+target_include_directories(dds-ktx INTERFACE ./dds-ktx)
+
 # fmt and Xbyak need to be added before dynarmic
 # libfmt
 option(FMT_INSTALL "" ON)
@@ -76,8 +78,8 @@ endif()
 
 # Dynarmic
 if ("x86_64" IN_LIST ARCHITECTURE OR "arm64" IN_LIST ARCHITECTURE)
-    set(DYNARMIC_TESTS OFF)
-    set(DYNARMIC_FRONTENDS "A32")
+    set(DYNARMIC_TESTS OFF CACHE BOOL "")
+    set(DYNARMIC_FRONTENDS "A32" CACHE STRING "")
     add_subdirectory(dynarmic EXCLUDE_FROM_ALL)
 endif()
 
@@ -89,24 +91,44 @@ endif()
 # Glad
 add_subdirectory(glad)
 
+# glslang
+set(SKIP_GLSLANG_INSTALL ON CACHE BOOL "")
+set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "")
+set(ENABLE_SPVREMAPPER OFF CACHE BOOL "")
+set(ENABLE_CTEST OFF CACHE BOOL "")
+set(ENABLE_HLSL OFF CACHE BOOL "")
+set(BUILD_EXTERNAL OFF CACHE BOOL "")
+add_subdirectory(glslang)
+
 # inih
 add_subdirectory(inih)
 
 # MicroProfile
 add_library(microprofile INTERFACE)
-target_include_directories(microprofile INTERFACE ./microprofile)
+target_include_directories(microprofile SYSTEM INTERFACE ./microprofile)
 
 # Nihstro
 add_library(nihstro-headers INTERFACE)
-target_include_directories(nihstro-headers INTERFACE ./nihstro/include)
+target_include_directories(nihstro-headers SYSTEM INTERFACE ./nihstro/include)
+if (MSVC)
+    # TODO: For some reason MSVC still applies this warning even with /W0 for externals.
+    target_compile_options(nihstro-headers INTERFACE /wd4715)
+endif()
 
 # Open Source Archives
 add_subdirectory(open_source_archives)
 
+# Dynamic library headers
+add_subdirectory(library-headers EXCLUDE_FROM_ALL)
+
 # SoundTouch
-add_subdirectory(soundtouch)
-# The SoundTouch target doesn't export the necessary include paths as properties by default
-target_include_directories(SoundTouch INTERFACE ./soundtouch/include)
+set(INTEGER_SAMPLES ON CACHE BOOL "")
+set(SOUNDSTRETCH OFF CACHE BOOL "")
+set(SOUNDTOUCH_DLL OFF CACHE BOOL "")
+add_subdirectory(soundtouch EXCLUDE_FROM_ALL)
+
+# sirit
+add_subdirectory(sirit EXCLUDE_FROM_ALL)
 
 # Teakra
 add_subdirectory(teakra EXCLUDE_FROM_ALL)
@@ -114,6 +136,13 @@ add_subdirectory(teakra EXCLUDE_FROM_ALL)
 # SDL2
 if (ENABLE_SDL2 AND NOT USE_SYSTEM_SDL2)
     add_subdirectory(sdl2)
+endif()
+
+# libusb
+if (ENABLE_LIBUSB AND NOT USE_SYSTEM_LIBUSB)
+    add_subdirectory(libusb)
+    set(LIBUSB_INCLUDE_DIR "" PARENT_SCOPE)
+    set(LIBUSB_LIBRARIES usb PARENT_SCOPE)
 endif()
 
 # Zstandard
@@ -130,6 +159,8 @@ target_include_directories(enet INTERFACE ./enet/include)
 # Cubeb
 if (ENABLE_CUBEB)
     set(BUILD_TESTS OFF CACHE BOOL "")
+    set(BUILD_TOOLS OFF CACHE BOOL "")
+    set(BUNDLE_SPEEX ON CACHE BOOL "")
     add_subdirectory(cubeb EXCLUDE_FROM_ALL)
 endif()
 
@@ -139,36 +170,43 @@ if (USE_DISCORD_PRESENCE)
     target_include_directories(discord-rpc INTERFACE ./discord-rpc/include)
 endif()
 
-if (ENABLE_WEB_SERVICE)
+# JSON
+add_library(json-headers INTERFACE)
+target_include_directories(json-headers INTERFACE ./json)
+
+# OpenSSL
+if (USE_SYSTEM_OPENSSL)
     find_package(OpenSSL 1.1)
     if (OPENSSL_FOUND)
         set(OPENSSL_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
-    else()
-        # LibreSSL
-        set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
-        set(OPENSSLDIR "/etc/ssl/")
-        add_subdirectory(libressl EXCLUDE_FROM_ALL)
-        target_include_directories(ssl INTERFACE ./libressl/include)
-        target_compile_definitions(ssl PRIVATE -DHAVE_INET_NTOP)
-        get_directory_property(OPENSSL_LIBRARIES
-            DIRECTORY libressl
-            DEFINITION OPENSSL_LIBS)
     endif()
-    # JSON
-    add_library(json-headers INTERFACE)
-    target_include_directories(json-headers INTERFACE ./json)
+endif()
 
-    if(ANDROID)
-        add_subdirectory(android-ifaddrs)
-    endif()
+if (NOT OPENSSL_FOUND)
+    # LibreSSL
+    set(LIBRESSL_SKIP_INSTALL ON CACHE BOOL "")
+    set(OPENSSLDIR "/etc/ssl/")
+    add_subdirectory(libressl EXCLUDE_FROM_ALL)
+    target_include_directories(ssl INTERFACE ./libressl/include)
+    target_compile_definitions(ssl PRIVATE -DHAVE_INET_NTOP)
+    get_directory_property(OPENSSL_LIBRARIES
+        DIRECTORY libressl
+        DEFINITION OPENSSL_LIBS)
+endif()
 
-    # httplib
-    add_library(httplib INTERFACE)
-    target_include_directories(httplib INTERFACE ./httplib)
-    target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
-    target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
+# httplib
+add_library(httplib INTERFACE)
+target_include_directories(httplib INTERFACE ./httplib)
+target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
+target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
 
-    # cpp-jwt
+if(ANDROID)
+    add_subdirectory(android-ifaddrs)
+    target_link_libraries(httplib INTERFACE ifaddrs)
+endif()
+
+# cpp-jwt
+if (ENABLE_WEB_SERVICE)
     add_library(cpp-jwt INTERFACE)
     target_include_directories(cpp-jwt INTERFACE ./cpp-jwt/include)
     target_compile_definitions(cpp-jwt INTERFACE CPP_JWT_USE_VENDORED_NLOHMANN_JSON)
@@ -183,3 +221,24 @@ if(ANDROID)
     add_subdirectory(libyuv)
     target_include_directories(yuv INTERFACE ./libyuv/include)
 endif()
+
+# OpenAL Soft
+if (ENABLE_OPENAL)
+    set(ALSOFT_EMBED_HRTF_DATA OFF CACHE BOOL "")
+    set(ALSOFT_EXAMPLES OFF CACHE BOOL "")
+    set(ALSOFT_INSTALL OFF CACHE BOOL "")
+    set(ALSOFT_INSTALL_CONFIG OFF CACHE BOOL "")
+    set(ALSOFT_INSTALL_HRTF_DATA OFF CACHE BOOL "")
+    set(ALSOFT_INSTALL_AMBDEC_PRESETS OFF CACHE BOOL "")
+    set(ALSOFT_UTILS OFF CACHE BOOL "")
+    set(LIBTYPE "STATIC" CACHE STRING "")
+    add_subdirectory(openal-soft EXCLUDE_FROM_ALL)
+endif()
+
+# VMA
+add_library(vma INTERFACE)
+target_include_directories(vma SYSTEM INTERFACE ./vma/include)
+
+# vulkan-headers
+add_library(vulkan-headers INTERFACE)
+target_include_directories(vulkan-headers SYSTEM INTERFACE ./vulkan-headers/include)

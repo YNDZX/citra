@@ -167,8 +167,7 @@ void GPUCommandListWidget::SetCommandInfo(const QModelIndex& index) {
         const auto format = texture.format;
 
         const auto info = Pica::Texture::TextureInfo::FromPicaRegister(config, format);
-        const u8* src =
-            Core::System::GetInstance().Memory().GetPhysicalPointer(config.GetPhysicalAddress());
+        const u8* src = system.Memory().GetPhysicalPointer(config.GetPhysicalAddress());
         new_info_widget = new TextureInfoWidget(src, info);
     }
     if (command_info_widget) {
@@ -182,8 +181,8 @@ void GPUCommandListWidget::SetCommandInfo(const QModelIndex& index) {
 }
 #undef COMMAND_IN_RANGE
 
-GPUCommandListWidget::GPUCommandListWidget(QWidget* parent)
-    : QDockWidget(tr("Pica Command List"), parent) {
+GPUCommandListWidget::GPUCommandListWidget(Core::System& system_, QWidget* parent)
+    : QDockWidget(tr("Pica Command List"), parent), system{system_} {
     setObjectName(QStringLiteral("Pica Command List"));
     GPUCommandListModel* model = new GPUCommandListModel(this);
 

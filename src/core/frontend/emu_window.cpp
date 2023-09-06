@@ -55,15 +55,17 @@ EmuWindow::EmuWindow(bool is_secondary_) : is_secondary{is_secondary_} {
 }
 
 EmuWindow::~EmuWindow() = default;
-/**
- * Check if the given x/y coordinates are within the touchpad specified by the framebuffer layout
- * @param layout FramebufferLayout object describing the framebuffer size and screen positions
- * @param framebuffer_x Framebuffer x-coordinate to check
- * @param framebuffer_y Framebuffer y-coordinate to check
- * @return True if the coordinates are within the touchpad, otherwise false
- */
-static bool IsWithinTouchscreen(const Layout::FramebufferLayout& layout, unsigned framebuffer_x,
-                                unsigned framebuffer_y) {
+
+bool EmuWindow::IsWithinTouchscreen(const Layout::FramebufferLayout& layout, unsigned framebuffer_x,
+                                    unsigned framebuffer_y) {
+#ifndef ANDROID
+    // If separate windows and the touch is in the primary (top) screen, ignore it.
+    if (Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows &&
+        !is_secondary && !Settings::values.swap_screen.GetValue()) {
+        return false;
+    }
+#endif
+
     if (Settings::values.render_3d.GetValue() == Settings::StereoRenderOption::SideBySide) {
         return (framebuffer_y >= layout.bottom_screen.top &&
                 framebuffer_y < layout.bottom_screen.bottom &&
@@ -110,7 +112,8 @@ std::tuple<unsigned, unsigned> EmuWindow::ClipToTouchScreen(unsigned new_x, unsi
 }
 
 void EmuWindow::CreateTouchState() {
-    if (touch_state = global_touch_state.lock()) {
+    touch_state = global_touch_state.lock();
+    if (touch_state) {
         return;
     }
     touch_state = std::make_shared<TouchState>();
@@ -173,20 +176,19 @@ void EmuWindow::TouchMoved(unsigned framebuffer_x, unsigned framebuffer_y) {
 void EmuWindow::UpdateCurrentFramebufferLayout(unsigned width, unsigned height,
                                                bool is_portrait_mode) {
     Layout::FramebufferLayout layout;
-    const auto layout_option = Settings::values.layout_option;
-    const auto min_size = Layout::GetMinimumSizeFromLayout(
-        layout_option.GetValue(), Settings::values.upright_screen.GetValue());
+
+    // If in portrait mode, only the MobilePortrait option really makes sense
+    const Settings::LayoutOption layout_option = is_portrait_mode
+                                                     ? Settings::LayoutOption::MobilePortrait
+                                                     : Settings::values.layout_option.GetValue();
+    const auto min_size =
+        Layout::GetMinimumSizeFromLayout(layout_option, Settings::values.upright_screen.GetValue());
 
     if (Settings::values.custom_layout.GetValue() == true) {
         layout = Layout::CustomFrameLayout(width, height, Settings::values.swap_screen.GetValue());
     } else {
         width = std::max(width, min_size.first);
         height = std::max(height, min_size.second);
-
-        // If in portrait mode, only the MobilePortrait option really makes sense
-        const Settings::LayoutOption layout_option =
-            is_portrait_mode ? Settings::LayoutOption::MobilePortrait
-                             : Settings::values.layout_option.GetValue();
 
         switch (layout_option) {
         case Settings::LayoutOption::SingleScreen:
@@ -199,6 +201,11 @@ void EmuWindow::UpdateCurrentFramebufferLayout(unsigned width, unsigned height,
                 Layout::LargeFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
                                          Settings::values.upright_screen.GetValue(),
                                          Settings::values.large_screen_proportion.GetValue());
+            break;
+        case Settings::LayoutOption::HybridScreen:
+            layout =
+                Layout::HybridScreenLayout(width, height, Settings::values.swap_screen.GetValue(),
+                                           Settings::values.upright_screen.GetValue());
             break;
         case Settings::LayoutOption::SideScreen:
             layout = Layout::SideFrameLayout(width, height, Settings::values.swap_screen.GetValue(),

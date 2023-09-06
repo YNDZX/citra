@@ -15,12 +15,10 @@
 #include "citra/emu_window/emu_window_sdl2.h"
 #include "citra/emu_window/emu_window_sdl2_gl.h"
 #include "citra/emu_window/emu_window_sdl2_sw.h"
-#include "citra/lodepng_image_interface.h"
 #include "common/common_paths.h"
 #include "common/detached_tasks.h"
 #include "common/file_util.h"
 #include "common/logging/backend.h"
-#include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
@@ -28,18 +26,16 @@
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/dumping/backend.h"
-#include "core/file_sys/cia_container.h"
+#include "core/dumping/ffmpeg_backend.h"
 #include "core/frontend/applets/default_applets.h"
 #include "core/frontend/framebuffer_layout.h"
-#include "core/gdbstub/gdbstub.h"
 #include "core/hle/service/am/am.h"
 #include "core/hle/service/cfg/cfg.h"
-#include "core/loader/loader.h"
 #include "core/movie.h"
+#include "core/telemetry_session.h"
 #include "input_common/main.h"
 #include "network/network.h"
 #include "video_core/renderer_base.h"
-#include "video_core/video_core.h"
 
 #undef _UNICODE
 #include <getopt.h>
@@ -174,23 +170,11 @@ static void OnStatusMessageReceived(const Network::StatusMessageEntry& msg) {
         std::cout << std::endl << "* " << message << std::endl << std::endl;
 }
 
-static void InitializeLogging() {
-    Log::Filter log_filter(Log::Level::Debug);
-    log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
-    Log::SetGlobalFilter(log_filter);
-
-    Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
-
-    const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
-    FileUtil::CreateFullPath(log_dir);
-    Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
-#ifdef _WIN32
-    Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
-#endif
-}
-
 /// Application entry point
 int main(int argc, char** argv) {
+    Common::Log::Initialize();
+    Common::Log::SetColorConsoleBackendEnabled(true);
+    Common::Log::Start();
     Common::DetachedTasks detached_tasks;
     Config config;
     int option_index = 0;
@@ -200,8 +184,6 @@ int main(int argc, char** argv) {
     std::string movie_record_author;
     std::string movie_play;
     std::string dump_video;
-
-    InitializeLogging();
 
     char* endarg;
 #ifdef _WIN32
@@ -344,34 +326,36 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    auto& system = Core::System::GetInstance();
+    auto& movie = system.Movie();
+
     if (!movie_record.empty()) {
-        Core::Movie::GetInstance().PrepareForRecording();
+        movie.PrepareForRecording();
     }
     if (!movie_play.empty()) {
-        Core::Movie::GetInstance().PrepareForPlayback(movie_play);
+        movie.PrepareForPlayback(movie_play);
     }
 
     // Apply the command line arguments
     Settings::values.gdbstub_port = gdb_port;
     Settings::values.use_gdbstub = use_gdbstub;
-    Settings::Apply();
+    system.ApplySettings();
 
     // Register frontend applets
-    Frontend::RegisterDefaultApplets();
-
-    // Register generic image interface
-    Core::System::GetInstance().RegisterImageInterface(std::make_shared<LodePNGImageInterface>());
+    Frontend::RegisterDefaultApplets(system);
 
     EmuWindow_SDL2::InitializeSDL2();
 
-    const auto create_emu_window = [](bool fullscreen,
-                                      bool is_secondary) -> std::unique_ptr<EmuWindow_SDL2> {
+    const auto create_emu_window = [&](bool fullscreen,
+                                       bool is_secondary) -> std::unique_ptr<EmuWindow_SDL2> {
         switch (Settings::values.graphics_api.GetValue()) {
         case Settings::GraphicsAPI::OpenGL:
-            return std::make_unique<EmuWindow_SDL2_GL>(fullscreen, is_secondary);
+            return std::make_unique<EmuWindow_SDL2_GL>(system, fullscreen, is_secondary);
         case Settings::GraphicsAPI::Software:
-            return std::make_unique<EmuWindow_SDL2_SW>(fullscreen, is_secondary);
+            return std::make_unique<EmuWindow_SDL2_SW>(system, fullscreen, is_secondary);
         }
+        LOG_ERROR(Frontend, "Invalid Graphics API, using OpenGL");
+        return std::make_unique<EmuWindow_SDL2_GL>(system, fullscreen, is_secondary);
     };
 
     const auto emu_window{create_emu_window(fullscreen, false)};
@@ -386,7 +370,6 @@ int main(int argc, char** argv) {
              Common::g_scm_desc);
     Settings::LogSettings();
 
-    Core::System& system = Core::System::GetInstance();
     const Core::System::ResultStatus load_result{
         system.Load(*emu_window, filepath, secondary_window.get())};
 
@@ -438,19 +421,22 @@ int main(int argc, char** argv) {
     }
 
     if (!movie_play.empty()) {
-        auto metadata = Core::Movie::GetInstance().GetMovieMetadata(movie_play);
+        auto metadata = movie.GetMovieMetadata(movie_play);
         LOG_INFO(Movie, "Author: {}", metadata.author);
         LOG_INFO(Movie, "Rerecord count: {}", metadata.rerecord_count);
         LOG_INFO(Movie, "Input count: {}", metadata.input_count);
-        Core::Movie::GetInstance().StartPlayback(movie_play);
+        movie.StartPlayback(movie_play);
     }
     if (!movie_record.empty()) {
-        Core::Movie::GetInstance().StartRecording(movie_record, movie_record_author);
+        movie.StartRecording(movie_record, movie_record_author);
     }
-    if (!dump_video.empty()) {
-        Layout::FramebufferLayout layout{Layout::FrameLayoutFromResolutionScale(
-            VideoCore::g_renderer->GetResolutionScaleFactor())};
-        system.VideoDumper().StartDumping(dump_video, layout);
+    if (!dump_video.empty() && DynamicLibrary::FFmpeg::LoadFFmpeg()) {
+        const auto layout{
+            Layout::FrameLayoutFromResolutionScale(system.Renderer().GetResolutionScaleFactor())};
+        auto dumper = std::make_shared<VideoDumper::FFmpegBackend>();
+        if (dumper->StartDumping(dump_video, layout)) {
+            system.RegisterVideoDumper(dumper);
+        }
     }
 
     std::thread main_render_thread([&emu_window] { emu_window->Present(); });
@@ -492,9 +478,11 @@ int main(int argc, char** argv) {
     main_render_thread.join();
     secondary_render_thread.join();
 
-    Core::Movie::GetInstance().Shutdown();
-    if (system.VideoDumper().IsDumping()) {
-        system.VideoDumper().StopDumping();
+    movie.Shutdown();
+
+    auto video_dumper = system.GetVideoDumper();
+    if (video_dumper && video_dumper->IsDumping()) {
+        video_dumper->StopDumping();
     }
 
     Network::Shutdown();

@@ -7,6 +7,7 @@
 #include "common/logging/log.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/frontend/emu_window.h"
 #include "video_core/pica.h"
 #include "video_core/pica_state.h"
 #include "video_core/renderer_base.h"
@@ -15,16 +16,12 @@
 #include "video_core/renderer_software/renderer_software.h"
 #include "video_core/video_core.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Video Core namespace
-
 namespace VideoCore {
 
 std::unique_ptr<RendererBase> g_renderer{}; ///< Renderer plugin
 
 std::atomic<bool> g_shader_jit_enabled;
 std::atomic<bool> g_hw_shader_enabled;
-std::atomic<bool> g_separable_shader_enabled;
 std::atomic<bool> g_hw_shader_accurate_mul;
 
 Memory::MemorySystem* g_memory;
@@ -40,7 +37,7 @@ void Init(Frontend::EmuWindow& emu_window, Frontend::EmuWindow* secondary_window
 
     switch (graphics_api) {
     case Settings::GraphicsAPI::Software:
-        g_renderer = std::make_unique<VideoCore::RendererSoftware>(system, emu_window);
+        g_renderer = std::make_unique<SwRenderer::RendererSoftware>(system, emu_window);
         break;
     case Settings::GraphicsAPI::OpenGL:
         g_renderer = std::make_unique<OpenGL::RendererOpenGL>(system, emu_window, secondary_window);

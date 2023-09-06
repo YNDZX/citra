@@ -14,6 +14,7 @@
 #include <boost/serialization/vector.hpp>
 #include "common/common_types.h"
 #include "common/construct.h"
+#include "common/swap.h"
 #include "core/file_sys/cia_container.h"
 #include "core/file_sys/file_backend.h"
 #include "core/global.h"
@@ -23,6 +24,10 @@
 
 namespace Core {
 class System;
+}
+
+namespace FileUtil {
+class IOFile;
 }
 
 namespace Service::FS {
@@ -95,6 +100,7 @@ private:
     FileSys::CIAContainer container;
     std::vector<u8> data;
     std::vector<u64> content_written;
+    std::vector<FileUtil::IOFile> content_files;
     Service::FS::MediaType media_type;
 
     class DecryptionState;
@@ -116,6 +122,13 @@ InstallStatus InstallCIA(const std::string& path,
  * @returns  whether the install was successful or error code
  */
 InstallStatus InstallFromNus(u64 title_id, int version = -1);
+
+/**
+ * Get the update title ID for a title
+ * @param titleId the title ID
+ * @returns The update title ID
+ */
+u64 GetTitleUpdateId(u64 title_id);
 
 /**
  * Get the mediatype for an installed title
@@ -355,6 +368,16 @@ public:
          *      2 : Total TicketList
          */
         void GetTicketList(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::NeedsCleanup service function
+         *  Inputs:
+         *      1 : Media Type
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : bool, Needs Cleanup
+         */
+        void NeedsCleanup(Kernel::HLERequestContext& ctx);
 
         /**
          * AM::QueryAvailableTitleDatabase service function

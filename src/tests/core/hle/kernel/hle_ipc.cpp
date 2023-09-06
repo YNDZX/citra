@@ -3,12 +3,10 @@
 // Refer to the license.txt file included.
 
 #include <catch2/catch_test_macros.hpp>
-#include "common/archives.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/ipc.h"
 #include "core/hle/kernel/client_port.h"
-#include "core/hle/kernel/client_session.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/handle_table.h"
 #include "core/hle/kernel/hle_ipc.h"
@@ -23,9 +21,11 @@ static std::shared_ptr<Object> MakeObject(Kernel::KernelSystem& kernel) {
 
 TEST_CASE("HLERequestContext::PopulateFromIncomingCommandBuffer", "[core][kernel]") {
     Core::Timing timing(1, 100);
-    Memory::MemorySystem memory;
+    Core::System system;
+    Memory::MemorySystem memory{system};
     Kernel::KernelSystem kernel(
-        memory, timing, [] {}, 0, 1, 0);
+        memory, timing, [] {}, Kernel::MemoryMode::Prod, 1,
+        Kernel::New3dsHwCapabilities{false, false, Kernel::New3dsMemoryMode::Legacy});
     auto [server, client] = kernel.CreateSessionPair();
     HLERequestContext context(kernel, std::move(server), nullptr);
 
@@ -168,6 +168,7 @@ TEST_CASE("HLERequestContext::PopulateFromIncomingCommandBuffer", "[core][kernel
         VAddr target_address = 0x10000000;
         auto result = process->vm_manager.MapBackingMemory(
             target_address, buffer, static_cast<u32>(buffer.GetSize()), MemoryState::Private);
+        REQUIRE(result.Code() == RESULT_SUCCESS);
 
         const u32_le input[]{
             IPC::MakeHeader(0, 0, 2),
@@ -245,9 +246,11 @@ TEST_CASE("HLERequestContext::PopulateFromIncomingCommandBuffer", "[core][kernel
 
 TEST_CASE("HLERequestContext::WriteToOutgoingCommandBuffer", "[core][kernel]") {
     Core::Timing timing(1, 100);
-    Memory::MemorySystem memory;
+    Core::System system;
+    Memory::MemorySystem memory{system};
     Kernel::KernelSystem kernel(
-        memory, timing, [] {}, 0, 1, 0);
+        memory, timing, [] {}, Kernel::MemoryMode::Prod, 1,
+        Kernel::New3dsHwCapabilities{false, false, Kernel::New3dsMemoryMode::Legacy});
     auto [server, client] = kernel.CreateSessionPair();
     HLERequestContext context(kernel, std::move(server), nullptr);
 

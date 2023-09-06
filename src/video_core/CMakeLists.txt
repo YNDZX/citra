@@ -1,6 +1,14 @@
+add_subdirectory(host_shaders)
+
 add_library(video_core STATIC
     command_processor.cpp
     command_processor.h
+    custom_textures/custom_format.cpp
+    custom_textures/custom_format.h
+    custom_textures/custom_tex_manager.cpp
+    custom_textures/custom_tex_manager.h
+    custom_textures/material.cpp
+    custom_textures/material.h
     debug_utils/debug_utils.cpp
     debug_utils/debug_utils.h
     geometry_pipeline.cpp
@@ -26,25 +34,31 @@ add_library(video_core STATIC
     regs_texturing.h
     renderer_base.cpp
     renderer_base.h
-    rasterizer_cache/cached_surface.cpp
-    rasterizer_cache/cached_surface.h
-    rasterizer_cache/morton_swizzle.h
+    rasterizer_cache/framebuffer_base.h
+    rasterizer_cache/pixel_format.cpp
     rasterizer_cache/pixel_format.h
     rasterizer_cache/rasterizer_cache.cpp
     rasterizer_cache/rasterizer_cache.h
-    rasterizer_cache/rasterizer_cache_types.h
-    rasterizer_cache/rasterizer_cache_utils.cpp
-    rasterizer_cache/rasterizer_cache_utils.h
+    rasterizer_cache/rasterizer_cache_base.h
+    rasterizer_cache/sampler_params.h
+    rasterizer_cache/slot_id.h
+    rasterizer_cache/surface_base.cpp
+    rasterizer_cache/surface_base.h
     rasterizer_cache/surface_params.cpp
     rasterizer_cache/surface_params.h
-    rasterizer_cache/texture_runtime.cpp
-    rasterizer_cache/texture_runtime.h
+    rasterizer_cache/texture_codec.h
+    rasterizer_cache/texture_cube.h
+    rasterizer_cache/utils.cpp
+    rasterizer_cache/utils.h
     renderer_opengl/frame_dumper_opengl.cpp
     renderer_opengl/frame_dumper_opengl.h
+    renderer_opengl/gl_blit_helper.cpp
+    renderer_opengl/gl_blit_helper.h
     renderer_opengl/gl_driver.cpp
     renderer_opengl/gl_driver.h
     renderer_opengl/gl_rasterizer.cpp
     renderer_opengl/gl_rasterizer.h
+    renderer_opengl/gl_rasterizer_cache.cpp
     renderer_opengl/gl_resource_manager.cpp
     renderer_opengl/gl_resource_manager.h
     renderer_opengl/gl_shader_decompiler.cpp
@@ -61,6 +75,10 @@ add_library(video_core STATIC
     renderer_opengl/gl_state.h
     renderer_opengl/gl_stream_buffer.cpp
     renderer_opengl/gl_stream_buffer.h
+    renderer_opengl/gl_texture_mailbox.cpp
+    renderer_opengl/gl_texture_mailbox.h
+    renderer_opengl/gl_texture_runtime.cpp
+    renderer_opengl/gl_texture_runtime.h
     renderer_opengl/gl_vars.cpp
     renderer_opengl/gl_vars.h
     renderer_opengl/pica_to_gl.h
@@ -68,26 +86,6 @@ add_library(video_core STATIC
     renderer_opengl/post_processing_opengl.h
     renderer_opengl/renderer_opengl.cpp
     renderer_opengl/renderer_opengl.h
-    renderer_opengl/texture_downloader_es.cpp
-    renderer_opengl/texture_downloader_es.h
-    renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.cpp
-    renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.h
-    renderer_opengl/texture_filters/bicubic/bicubic.cpp
-    renderer_opengl/texture_filters/bicubic/bicubic.h
-    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.cpp
-    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.h
-    renderer_opengl/texture_filters/scale_force/scale_force.cpp
-    renderer_opengl/texture_filters/scale_force/scale_force.h
-    renderer_opengl/texture_filters/texture_filter_base.h
-    renderer_opengl/texture_filters/texture_filterer.cpp
-    renderer_opengl/texture_filters/texture_filterer.h
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.cpp
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.h
-    #temporary, move these back in alphabetical order before merging
-    renderer_opengl/gl_format_reinterpreter.cpp
-    renderer_opengl/gl_format_reinterpreter.h
-    renderer_software/rasterizer.cpp
-    renderer_software/rasterizer.h
     renderer_software/renderer_software.cpp
     renderer_software/renderer_software.h
     renderer_software/sw_clipper.cpp
@@ -102,6 +100,19 @@ add_library(video_core STATIC
     renderer_software/sw_rasterizer.h
     renderer_software/sw_texturing.cpp
     renderer_software/sw_texturing.h
+    renderer_vulkan/pica_to_vk.h
+    renderer_vulkan/vk_common.cpp
+    renderer_vulkan/vk_common.h
+    renderer_vulkan/vk_instance.cpp
+    renderer_vulkan/vk_instance.h
+    renderer_vulkan/vk_platform.cpp
+    renderer_vulkan/vk_platform.h
+    renderer_vulkan/vk_shader_gen.cpp
+    renderer_vulkan/vk_shader_gen.h
+    renderer_vulkan/vk_shader_gen_spv.cpp
+    renderer_vulkan/vk_shader_gen_spv.h
+    renderer_vulkan/vk_shader_util.cpp
+    renderer_vulkan/vk_shader_util.h
     shader/debug_data.h
     shader/shader.cpp
     shader/shader.h
@@ -124,43 +135,14 @@ add_library(video_core STATIC
     video_core.h
 )
 
-set(SHADER_FILES
-    renderer_opengl/depth_to_color.frag
-    renderer_opengl/depth_to_color.vert
-    renderer_opengl/ds_to_color.frag
-    renderer_opengl/texture_filters/anime4k/refine.frag
-    renderer_opengl/texture_filters/anime4k/x_gradient.frag
-    renderer_opengl/texture_filters/anime4k/y_gradient.frag
-    renderer_opengl/texture_filters/bicubic/bicubic.frag
-    renderer_opengl/texture_filters/nearest_neighbor/nearest_neighbor.frag
-    renderer_opengl/texture_filters/scale_force/scale_force.frag
-    renderer_opengl/texture_filters/tex_coord.vert
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.frag
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.vert
-)
-
-include(${CMAKE_CURRENT_SOURCE_DIR}/generate_shaders.cmake)
-
-foreach(shader_file ${SHADER_FILES})
-    get_filename_component(shader_file_name ${shader_file} NAME)
-    GetShaderHeaderFile(${shader_file_name})
-    list(APPEND SHADER_HEADERS ${shader_header_file})
-endforeach()
-
-add_custom_target(shaders
-    BYPRODUCTS ${SHADER_HEADERS}
-    COMMAND "${CMAKE_COMMAND}" -P ${CMAKE_CURRENT_SOURCE_DIR}/generate_shaders.cmake
-    SOURCES ${SHADER_FILES}
-)
-add_dependencies(video_core shaders)
-
-target_include_directories(video_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+add_dependencies(video_core host_shaders)
+target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
 
 create_target_directory_groups(video_core)
 
-target_link_libraries(video_core PUBLIC common core)
-target_link_libraries(video_core PRIVATE glad nihstro-headers Boost::serialization)
-set_target_properties(video_core PROPERTIES INTERPROCEDURAL_OPTIMIZATION ${ENABLE_LTO})
+target_link_libraries(video_core PUBLIC citra_common citra_core)
+target_link_libraries(video_core PRIVATE Boost::serialization dds-ktx json-headers nihstro-headers tsl::robin_map)
+target_link_libraries(video_core PRIVATE vulkan-headers vma glad sirit SPIRV glslang)
 
 if ("x86_64" IN_LIST ARCHITECTURE)
     target_link_libraries(video_core PUBLIC xbyak)

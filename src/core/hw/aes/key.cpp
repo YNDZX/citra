@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <boost/iostreams/device/file_descriptor.hpp>
@@ -298,13 +299,13 @@ void LoadSafeModeNativeFirmKeysOld3DS() {
     std::vector<u8> firm_buffer(size);
     firm->Read(0, firm_buffer.size(), firm_buffer.data());
     firm->Close();
-
-    AESKey key;
-    constexpr std::size_t SLOT_0x31_KEY_Y_OFFSET = 817672;
-    std::memcpy(key.data(), firm_buffer.data() + SLOT_0x31_KEY_Y_OFFSET, sizeof(key));
-    key_slots.at(0x31).SetKeyY(key);
-    LOG_DEBUG(HW_AES, "Loaded Slot0x31 KeyY: {}", KeyToString(key));
-
+    {
+        AESKey key;
+        constexpr std::size_t SLOT_0x31_KEY_Y_OFFSET = 817672;
+        std::memcpy(key.data(), firm_buffer.data() + SLOT_0x31_KEY_Y_OFFSET, sizeof(key));
+        key_slots.at(0x31).SetKeyY(key);
+        LOG_DEBUG(HW_AES, "Loaded Slot0x31 KeyY: {}", KeyToString(key));
+    }
     auto LoadCommonKey = [&firm_buffer](std::size_t key_slot) -> AESKey {
         constexpr std::size_t START_OFFSET = 836533;
         constexpr std::size_t OFFSET = 0x14; // 0x10 bytes for key + 4 bytes between keys
@@ -417,13 +418,13 @@ void LoadNativeFirmKeysNew3DS() {
     d2.SetKeyWithIV(normal_key_slot0x15->data(), normal_key_slot0x15->size(),
                     arm9_header.CTR.data(), arm9_header.CTR.size());
     d2.ProcessData(arm9_binary.data(), enc_arm9_binary.data(), enc_arm9_binary.size());
-
-    AESKey key;
-    constexpr std::size_t SLOT_0x31_KEY_Y_OFFSET = 517368;
-    std::memcpy(key.data(), arm9_binary.data() + SLOT_0x31_KEY_Y_OFFSET, sizeof(key));
-    key_slots.at(0x31).SetKeyY(key);
-    LOG_DEBUG(HW_AES, "Loaded Slot0x31 KeyY: {}", KeyToString(key));
-
+    {
+        AESKey key;
+        constexpr std::size_t SLOT_0x31_KEY_Y_OFFSET = 517368;
+        std::memcpy(key.data(), arm9_binary.data() + SLOT_0x31_KEY_Y_OFFSET, sizeof(key));
+        key_slots.at(0x31).SetKeyY(key);
+        LOG_DEBUG(HW_AES, "Loaded Slot0x31 KeyY: {}", KeyToString(key));
+    }
     auto LoadCommonKey = [&arm9_binary](std::size_t key_slot) -> AESKey {
         constexpr std::size_t START_OFFSET = 541065;
         constexpr std::size_t OFFSET = 0x14; // 0x10 bytes for key + 4 bytes between keys
@@ -458,8 +459,7 @@ void LoadPresetKeys() {
             continue;
         }
 
-        std::vector<std::string> parts;
-        Common::SplitString(line, '=', parts);
+        const auto parts = Common::SplitString(line, '=');
         if (parts.size() != 2) {
             LOG_ERROR(HW_AES, "Failed to parse {}", line);
             continue;
@@ -573,6 +573,10 @@ void SetNormalKey(std::size_t slot_id, const AESKey& key) {
     key_slots.at(slot_id).SetNormalKey(key);
 }
 
+bool IsKeyXAvailable(std::size_t slot_id) {
+    return key_slots.at(slot_id).x.has_value();
+}
+
 bool IsNormalKeyAvailable(std::size_t slot_id) {
     return key_slots.at(slot_id).normal.has_value();
 }
@@ -589,8 +593,18 @@ void SelectDlpNfcKeyYIndex(u8 index) {
     key_slots[KeySlotID::DLPNFCDataKey].SetKeyY(dlp_nfc_key_y_slots.at(index));
 }
 
-const NfcSecret& GetNfcSecret(u8 index) {
-    return nfc_secrets[index];
+bool NfcSecretsAvailable() {
+    auto missing_secret =
+        std::find_if(nfc_secrets.begin(), nfc_secrets.end(), [](auto& nfc_secret) {
+            return nfc_secret.phrase.empty() || nfc_secret.seed.empty() ||
+                   nfc_secret.hmac_key.empty();
+        });
+    SelectDlpNfcKeyYIndex(DlpNfcKeyY::Nfc);
+    return IsNormalKeyAvailable(KeySlotID::DLPNFCDataKey) && missing_secret == nfc_secrets.end();
+}
+
+const NfcSecret& GetNfcSecret(NfcSecretId secret_id) {
+    return nfc_secrets[secret_id];
 }
 
 const AESIV& GetNfcIv() {
